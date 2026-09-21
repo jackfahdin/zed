@@ -5,8 +5,7 @@ to GPUI on top of an unmodified upstream base.
 
 - Fork: <https://github.com/nyakang/zed>
 - Upstream: <https://github.com/zed-industries/zed>
-- Base revision: `801c087af2` (the Zed snapshot published as
-  `gpui-pre 0.3.1`)
+- Base revision: `63b29c2edd` (upstream `main` on 2026-09-21)
 - Branch: `nyaterm`
 - Crates touched: `gpui`, `gpui_apple`, `gpui_wgpu`, `gpui_windows`,
   `gpui_linux`, `gpui_macos`, and `gpui_web`. Nothing else in the workspace is
@@ -54,26 +53,31 @@ NyaTerm-local about them to keep out of this branch.
 
 ## Validation
 
-The series was rebased from `4278ff36` onto `801c087a`, 130 upstream commits
-later, so gpui-component 0.6.0 and NyaTerm compile against the same GPUI API.
-Two conflicts required manual resolution:
+The branch merged upstream `63b29c2edd` after the original patch series was
+based on `801c087af2`. Four conflicts required manual resolution:
 
-- `crates/gpui/src/window.rs` gained upstream touch and text-input state. The
-  resolution keeps those imports and APIs and adds `DynamicTexture` and
-  `DynamicTextureId` alongside them.
-- `crates/gpui_macos/src/window.rs` changed window construction while moving
-  prompts to objc2. The resolution keeps that construction and initializes the
-  cached transparent `NSCursor` before the new shared state is created.
+- `crates/gpui/src/platform.rs` moved atlas bookkeeping into `AtlasState` and
+  changed `get_or_insert_with` to take an owned key. The resolution keeps that
+  model, adds a read-only tile lookup, and carries `PlatformAtlas::update` on
+  the platform atlas rather than its backend.
+- `crates/gpui/src/platform/test/window.rs` keeps the upstream shared headless
+  atlas for ordinary test windows and retains a focused pixel-recording atlas
+  for dirty-region validation.
+- `crates/gpui/src/window.rs` keeps upstream visibility and text-system changes
+  while adapting the dynamic-texture calls to the owned-key atlas API.
+- `crates/gpui_linux/src/linux/headless/window.rs` now uses GPUI's shared
+  `HeadlessAtlas`; the duplicate NyaTerm-local implementation was dropped.
 
-The atlas implementations and Windows dialog-owner changes applied without
-conflicts.
+Metal, WGPU, and DirectX updates were moved into their `PlatformAtlas`
+implementations to match the new upstream split between atlas state and backend
+allocation. The hidden-cursor and Windows dialog-owner patches merged without
+content conflicts.
 
 On Windows 11 at the new base:
 
 ```sh
-cargo check -p gpui -p gpui_platform   # clean
+cargo check -p gpui -p gpui_platform -p gpui_windows
 cargo test -p gpui strided_update_preserves_pixels_outside_the_dirty_rectangle
-cargo check -p gpui_windows            # clean
 cargo fmt -p gpui -p gpui_platform -p gpui_windows -p gpui_apple \
   -p gpui_linux -p gpui_web -p gpui_wgpu -- --check
 ```
@@ -91,14 +95,6 @@ fails before running tests because `gpui_windows::WindowsWindow` exposes the
 test-only `render_to_image` method while the selected `gpui::PlatformWindow`
 trait does not. The normal library check is clean; Linux, macOS, and Web
 exhaustive cursor matches are covered by the branch workflow.
-
-One consumer-visible thing to know about this base rather than about the patches:
-`gpui-component` declares `gpui` with `features = ["profiler"]`, so feature
-unification turns the profiler on for anything that links both. Upstream's
-`1861e58f98` added a per-thread foreground journal and a hang detector (about
-4,000 lines) that hook `App::new`, `ForegroundExecutor::new`,
-`PlatformScheduler::schedule_local`, the window frame-request closure and
-`present`. The checks above use default features and never compile that path.
 
 The owner-disabled rollback is not covered by a test: it needs one of six Win32
 calls inside `WindowsWindow::new` to fail, and none of them is injectable from
