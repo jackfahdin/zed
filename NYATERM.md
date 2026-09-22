@@ -5,7 +5,7 @@ to GPUI on top of an unmodified upstream base.
 
 - Fork: <https://github.com/nyakang/zed>
 - Upstream: <https://github.com/zed-industries/zed>
-- Base revision: `63b29c2edd` (upstream `main` on 2026-09-21)
+- Base revision: `f25434f3c5` (upstream `main` on 2026-09-22)
 - Branch: `nyaterm`
 - Crates touched: `gpui`, `gpui_apple`, `gpui_wgpu`, `gpui_windows`,
   `gpui_linux`, `gpui_macos`, and `gpui_web`. Nothing else in the workspace is
@@ -53,8 +53,8 @@ NyaTerm-local about them to keep out of this branch.
 
 ## Validation
 
-The branch merged upstream `63b29c2edd` after the original patch series was
-based on `801c087af2`. Four conflicts required manual resolution:
+The branch first merged upstream `63b29c2edd` after the original patch series
+was based on `801c087af2`. Four conflicts required manual resolution:
 
 - `crates/gpui/src/platform.rs` moved atlas bookkeeping into `AtlasState` and
   changed `get_or_insert_with` to take an owned key. The resolution keeps that
@@ -101,3 +101,7 @@ calls inside `WindowsWindow::new` to fail, and none of them is injectable from
 outside the function. It was reviewed against `handle_destroy_msg`
 (`crates/gpui_windows/src/events.rs`), which is the only other place that
 re-enables an owner, so that both paths do the same two things in the same order.
+
+The 2026-09-22 merge to `f25434f3c5` applied without conflicts. It carries the
+upstream X11 expose recovery and WGPU atlas bind-group cache changes alongside
+the NyaTerm dynamic-texture implementations.
