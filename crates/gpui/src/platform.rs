@@ -943,6 +943,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
+    /// Tells the platform whether GPUI currently owns an in-process typed drag.
+    /// Windows uses this to route captured pointer events across application windows.
+    fn set_internal_drag_active(&self, _active: bool) {}
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
     /// Registers the callback invoked when [`Self::visibility`] changes. Only
     /// transitions are reported; the callback runs on the main thread outside

@@ -78,6 +78,28 @@ impl Drop for DrawWindowGuard<'_> {
     }
 }
 
+fn mouse_button_from_wparam(wparam: WPARAM) -> Option<MouseButton> {
+    match MODIFIERKEYS_FLAGS(wparam.loword() as u32) {
+        flags if flags.contains(MK_LBUTTON) => Some(MouseButton::Left),
+        flags if flags.contains(MK_RBUTTON) => Some(MouseButton::Right),
+        flags if flags.contains(MK_MBUTTON) => Some(MouseButton::Middle),
+        flags if flags.contains(MK_XBUTTON1) => {
+            Some(MouseButton::Navigate(NavigationDirection::Back))
+        }
+        flags if flags.contains(MK_XBUTTON2) => {
+            Some(MouseButton::Navigate(NavigationDirection::Forward))
+        }
+        _ => None,
+    }
+}
+
+fn dispatch_input_to_window(window: &Rc<WindowsWindowInner>, input: PlatformInput) -> Option<bool> {
+    let mut callback = window.state.callbacks.input.take()?;
+    let handled = !callback(input).propagate;
+    window.state.callbacks.input.set(Some(callback));
+    Some(handled)
+}
+
 impl WindowsWindowInner {
     pub(crate) fn handle_msg(
         self: &Rc<Self>,
@@ -369,23 +391,25 @@ impl WindowsWindowInner {
         self.start_tracking_mouse(handle, TME_LEAVE);
         self.restore_cursor_after_hide();
 
+        if let Some((target, target_handle, position)) = self.internal_drag_target(handle, lparam) {
+            target.start_tracking_mouse(target_handle, TME_LEAVE);
+            target.restore_cursor_after_hide();
+            let input = PlatformInput::MouseMove(MouseMoveEvent {
+                position,
+                pressed_button: mouse_button_from_wparam(wparam),
+                modifiers: current_modifiers(),
+            });
+            if let Some(handled) = dispatch_input_to_window(&target, input) {
+                return Some(if handled { 0 } else { 1 });
+            }
+        }
+
         let Some(mut func) = self.state.callbacks.input.take() else {
             return Some(1);
         };
         let scale_factor = self.state.scale_factor.get();
 
-        let pressed_button = match MODIFIERKEYS_FLAGS(wparam.loword() as u32) {
-            flags if flags.contains(MK_LBUTTON) => Some(MouseButton::Left),
-            flags if flags.contains(MK_RBUTTON) => Some(MouseButton::Right),
-            flags if flags.contains(MK_MBUTTON) => Some(MouseButton::Middle),
-            flags if flags.contains(MK_XBUTTON1) => {
-                Some(MouseButton::Navigate(NavigationDirection::Back))
-            }
-            flags if flags.contains(MK_XBUTTON2) => {
-                Some(MouseButton::Navigate(NavigationDirection::Forward))
-            }
-            _ => None,
-        };
+        let pressed_button = mouse_button_from_wparam(wparam);
         let x = lparam.signed_loword() as f32;
         let y = lparam.signed_hiword() as f32;
         let input = PlatformInput::MouseMove(MouseMoveEvent {
@@ -515,11 +539,32 @@ impl WindowsWindowInner {
 
     fn handle_mouse_up_msg(
         &self,
-        _handle: HWND,
+        handle: HWND,
         button: MouseButton,
         lparam: LPARAM,
     ) -> Option<isize> {
         unsafe { ReleaseCapture().log_err() };
+
+        if let Some((target, _, position)) = self.internal_drag_target(handle, lparam) {
+            let modifiers = current_modifiers();
+            dispatch_input_to_window(
+                &target,
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position,
+                    pressed_button: Some(button),
+                    modifiers,
+                }),
+            );
+            let input = PlatformInput::MouseUp(MouseUpEvent {
+                button,
+                position,
+                modifiers,
+                click_count: self.state.click_state.current_count.get(),
+            });
+            if let Some(handled) = dispatch_input_to_window(&target, input) {
+                return Some(if handled { 0 } else { 1 });
+            }
+        }
 
         let Some(mut func) = self.state.callbacks.input.take() else {
             return Some(1);
@@ -539,6 +584,42 @@ impl WindowsWindowInner {
         self.state.callbacks.input.set(Some(func));
 
         if handled { Some(0) } else { Some(1) }
+    }
+
+    fn internal_drag_target(
+        &self,
+        source: HWND,
+        lparam: LPARAM,
+    ) -> Option<(Rc<WindowsWindowInner>, HWND, Point<Pixels>)> {
+        if !self.state.internal_drag_active.get() {
+            return None;
+        }
+        let mut screen_point = POINT {
+            x: lparam.signed_loword().into(),
+            y: lparam.signed_hiword().into(),
+        };
+        if !unsafe { ClientToScreen(source, &mut screen_point) }.as_bool() {
+            return None;
+        }
+        let hovered = unsafe { WindowFromPoint(screen_point) };
+        if hovered.is_invalid() {
+            return None;
+        }
+        let target_handle = unsafe { GetAncestor(hovered, GA_ROOT) };
+        if target_handle.is_invalid() || target_handle == source {
+            return None;
+        }
+        let target = window_from_hwnd(target_handle)?;
+        let mut client_point = screen_point;
+        if !unsafe { ScreenToClient(target_handle, &mut client_point) }.as_bool() {
+            return None;
+        }
+        let position = logical_point(
+            client_point.x as f32,
+            client_point.y as f32,
+            target.state.scale_factor.get(),
+        );
+        Some((target, target_handle, position))
     }
 
     fn handle_xbutton_msg(

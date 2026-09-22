@@ -43,6 +43,13 @@ and clones the entire framebuffer for every frame.
    hitbox-scoped cursor style. Windows uses a null `HCURSOR`, X11 reuses its
    persistent invisible cursor, Wayland clears the pointer surface, macOS uses
    a cached transparent `NSCursor`, and Web maps the style to CSS `none`.
+7. `fix(gpui_windows): route internal drags across app windows` — while Win32
+   mouse capture keeps delivering a typed GPUI drag to its source HWND, resolve
+   the root GPUI window under the screen-space pointer, translate coordinates
+   using that window's DPI, and deliver move/up to its existing input callback.
+   Ordinary capture is unchanged because routing is gated by GPUI's active
+   internal-drag state; dropping over another process or the desktop remains a
+   source-window cancellation.
 
 ## Not carried here
 
@@ -105,3 +112,15 @@ re-enables an owner, so that both paths do the same two things in the same order
 The 2026-09-22 merge to `f25434f3c5` applied without conflicts. It carries the
 upstream X11 expose recovery and WGPU atlas bind-group cache changes alongside
 the NyaTerm dynamic-texture implementations.
+
+The cross-window internal-drag patch was checked on Windows 11 with:
+
+```sh
+cargo check -p gpui -p gpui_platform -p gpui_windows
+cargo test -p gpui typed_drag_can_be_handed_to_another_window
+cargo fmt --all -- --check
+```
+
+The focused test starts a typed drag in one GPUI window and dispatches the move
+and release through a second window, asserting that the second window consumes
+the payload and that the application-global drag state is cleared.
