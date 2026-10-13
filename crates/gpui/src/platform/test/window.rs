@@ -5,7 +5,9 @@ use crate::{
     Scene, Size, TestDisplay, TestPlatform, TextInputConfiguration, TextInputStateChange,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets,
     WindowParams, WindowVisibility,
+    AtlasKey, AtlasTextureId, AtlasTile, TileId,
 };
+use collections::HashMap;
 use gpui_util::ResultExt as _;
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
@@ -59,6 +61,7 @@ pub(crate) struct TestWindowState {
     appearance: WindowAppearance,
     decorations: Decorations,
     external_drag_files: Vec<(PathBuf, bool)>,
+    external_drag_virtual_names: Vec<std::ffi::OsString>,
     start_external_drag_result: bool,
 }
 
@@ -136,6 +139,7 @@ impl TestWindow {
             appearance: WindowAppearance::Light,
             decorations: Decorations::default(),
             external_drag_files: Vec::new(),
+            external_drag_virtual_names: Vec::new(),
             start_external_drag_result: false,
         })))
     }
@@ -320,6 +324,10 @@ impl TestWindow {
 
     pub fn external_drag_files(&self) -> Vec<(PathBuf, bool)> {
         self.0.lock().external_drag_files.clone()
+    }
+
+    pub fn external_drag_virtual_names(&self) -> Vec<std::ffi::OsString> {
+        self.0.lock().external_drag_virtual_names.clone()
     }
 
     pub fn set_start_external_drag_result(&self, result: bool) {
@@ -630,11 +638,22 @@ impl PlatformWindow for TestWindow {
         true
     }
 
+    fn supports_virtual_file_drag(&self) -> bool {
+        true
+    }
+
     fn start_external_drag(&self, payload: &crate::ExternalDragPayload) -> bool {
         let mut state = self.0.lock();
         match payload {
             crate::ExternalDragPayload::Files(paths) => {
                 state.external_drag_files.extend_from_slice(paths.entries());
+            }
+            crate::ExternalDragPayload::VirtualFileTree(_)
+            | crate::ExternalDragPayload::PromisedFiles(_) => return false,
+            crate::ExternalDragPayload::VirtualFiles(files) => {
+                state
+                    .external_drag_virtual_names
+                    .extend(files.files().iter().map(|file| file.name.clone()));
             }
         }
         state.start_external_drag_result

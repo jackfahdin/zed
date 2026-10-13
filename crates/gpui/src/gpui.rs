@@ -35,6 +35,7 @@ mod color;
 mod element;
 mod elements;
 mod executor;
+mod file_promise;
 mod geometry;
 mod gestures;
 mod global;
@@ -59,6 +60,9 @@ mod taffy;
 mod text_system;
 mod util;
 mod view;
+mod virtual_file;
+#[cfg(test)]
+mod virtual_file_tests;
 mod window;
 
 #[cfg(feature = "profiler")]
@@ -128,6 +132,7 @@ pub use global::*;
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };
+pub use file_promise::{PromisedFileDescriptor, PromisedFileDragPayload, PromisedFileProvider};
 pub use gpui_shared_string::*;
 pub use gpui_util::arc_cow::ArcCow;
 pub use input::*;
@@ -150,6 +155,11 @@ pub use taffy::{AvailableSpace, LayoutId};
 pub use text_system::*;
 pub use util::{FutureExt, Timeout};
 pub use view::*;
+pub use virtual_file::{
+    NativeFileDragEvent, NativeFileDragObserver, NativeFileDragOutcome,
+    DeferredVirtualFileDragPayload, VIRTUAL_FILE_CHUNK_SIZE, VirtualFileDescriptor,
+    VirtualFileDragPayload, VirtualFileProvider, VirtualFileStream, VirtualFileTreeProvider,
+};
 pub use window::*;
 
 #[cfg(not(target_family = "wasm"))]
