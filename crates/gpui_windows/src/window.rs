@@ -89,6 +89,7 @@ pub struct WindowsWindowState {
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
     /// Shared with every window to gate same-process cross-window drag routing.
     pub(crate) internal_drag_active: Rc<Cell<bool>>,
+    pub(crate) pointer_capture: PointerCaptureState,
     fullscreen: Cell<Option<StyleAndBounds>>,
     initial_placement: Cell<Option<WindowOpenStatus>>,
     hwnd: HWND,
@@ -129,6 +130,7 @@ impl WindowsWindowState {
         invalidate_devices: Arc<AtomicBool>,
         draw_coordinator: Rc<DrawCoordinator>,
         internal_drag_active: Rc<Cell<bool>>,
+        pointer_capture_generation: Rc<Cell<usize>>,
     ) -> Result<Self> {
         let scale_factor = {
             let monitor_dpi = unsafe { GetDpiForWindow(hwnd) } as f32;
@@ -196,6 +198,7 @@ impl WindowsWindowState {
             invalidate_devices,
             draw_coordinator,
             internal_drag_active,
+            pointer_capture: PointerCaptureState::new(pointer_capture_generation),
             direct_manipulation,
             a11y: RefCell::new(None),
             mouse_position: Cell::new(Point::default()),
@@ -262,6 +265,10 @@ impl WindowsWindowState {
 }
 
 impl WindowsWindowInner {
+    pub(crate) fn get_raw_handle(&self) -> HWND {
+        self.hwnd
+    }
+
     /// Whether the window is being presented: shown and not minimized. Windows
     /// has no notification for a window fully covered by other windows, so
     /// that case reports `Visible`.
@@ -289,6 +296,7 @@ impl WindowsWindowInner {
             context.invalidate_devices.clone(),
             context.draw_coordinator.clone(),
             context.internal_drag_active.clone(),
+            context.pointer_capture_generation.clone(),
         )?;
 
         Ok(Rc::new(Self {
@@ -442,6 +450,7 @@ struct WindowCreateContext {
     invalidate_devices: Arc<AtomicBool>,
     draw_coordinator: Rc<DrawCoordinator>,
     internal_drag_active: Rc<Cell<bool>>,
+    pointer_capture_generation: Rc<Cell<usize>>,
     parent_hwnd: Option<HWND>,
 }
 
@@ -516,6 +525,7 @@ impl WindowsWindow {
             invalidate_devices,
             draw_coordinator,
             internal_drag_active,
+            pointer_capture_generation,
         } = creation_info;
         register_window_class(icon);
         // Disabling the owner is what makes a dialog modal, and it is a resource
@@ -611,6 +621,7 @@ impl WindowsWindow {
             invalidate_devices,
             draw_coordinator,
             internal_drag_active,
+            pointer_capture_generation,
             parent_hwnd,
         };
         let creation_result = unsafe {
@@ -713,9 +724,7 @@ impl PlatformWindow for WindowsWindow {
             return false;
         };
         // GPUI has captured the gesture; OLE's drag apartment takes it over.
-        unsafe {
-            let _ = ReleaseCapture();
-        }
+        self.release_pointer_capture(CaptureReleaseReason::NativeDrag);
         crate::external_drag::start(
             payload.clone(),
             Arc::downgrade(lifetime),
