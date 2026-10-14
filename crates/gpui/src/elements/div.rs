@@ -25,6 +25,7 @@ use crate::{
     MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels,
     Point, Render, ScrollEvent, SharedString, Size, Style, StyleRefinement, Styled, Task,
     TooltipId, TouchPhase, Visibility, Window, WindowControlArea, point, px, size,
+    IntoElement, PointerCancelEvent,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -3372,6 +3373,20 @@ impl Interactivity {
                 .clicked_state
                 .get_or_insert_with(Default::default)
                 .clone();
+
+            {
+                let active_state = active_state.clone();
+                let pending_mouse_down = element_state.pending_mouse_down.clone();
+                window.on_mouse_event(move |_: &PointerCancelEvent, phase, window, _cx| {
+                    if phase.capture() {
+                        if let Some(pending_mouse_down) = &pending_mouse_down {
+                            pending_mouse_down.borrow_mut().take();
+                        }
+                        *active_state.borrow_mut() = ElementClickedState::default();
+                        window.refresh();
+                    }
+                });
+            }
 
             {
                 let active_state = active_state.clone();
