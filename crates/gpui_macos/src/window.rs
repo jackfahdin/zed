@@ -1162,7 +1162,8 @@ impl MacWindow {
             // NSCursor keeps hidden cursor styling scoped to this view's cursor rect.
             let hidden_cursor: *mut AnyObject = msg_send![class!(NSCursor), alloc];
             let hidden_image: *mut AnyObject = msg_send![class!(NSImage), alloc];
-            let hidden_image: *mut AnyObject = msg_send![hidden_image, initWithSize: NSSize::new(1., 1.)];
+            let hidden_image: *mut AnyObject =
+                msg_send![hidden_image, initWithSize: NSSize::new(1., 1.)];
             let hidden_cursor: *mut AnyObject = msg_send![
                 hidden_cursor,
                 initWithImage: hidden_image
