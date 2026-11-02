@@ -2655,6 +2655,10 @@ pub enum TextInputAction {
 /// The variables that can be configured when creating a new window
 #[derive(Debug)]
 pub struct WindowOptions {
+    /// Reserve support for native child surfaces on Windows. This must be
+    /// selected at creation because Windows cannot change redirection later.
+    /// Other platforms ignore this option. Defaults to false.
+    pub native_child_surfaces: bool,
     /// Specifies the state and bounds of the window in screen coordinates.
     /// - `None`: Inherit the bounds.
     /// - `Some(WindowBounds)`: Open a window with corresponding state and its restore size.
@@ -2752,6 +2756,8 @@ pub struct WindowOptions {
 )]
 #[allow(missing_docs)]
 pub struct WindowParams {
+    #[cfg(target_os = "windows")]
+    pub native_child_surfaces: bool,
     pub bounds: Bounds<Pixels>,
 
     /// The titlebar configuration of the window
@@ -2847,6 +2853,7 @@ impl WindowBounds {
 impl Default for WindowOptions {
     fn default() -> Self {
         Self {
+            native_child_surfaces: false,
             window_bounds: None,
             titlebar: Some(TitlebarOptions {
                 title: Default::default(),
