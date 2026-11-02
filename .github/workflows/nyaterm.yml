@@ -74,18 +74,10 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo test -p gpui_macos file_promise --lib
 
-      - name: Native Windows drag tests
+      - name: Native Windows regressions
         if: runner.os == 'Windows'
-        run: cargo test -p gpui_windows --features test-support external_drag --lib
+        run: cargo test -p gpui_windows --features test-support --lib -- --test-threads=1
 
-      - name: Safe Windows internal drag targets
+      - name: GPUI input, overlay and texture regressions
         if: runner.os == 'Windows'
-        run: cargo test -p gpui_windows --features test-support internal_drag --lib
-
-      - name: Windows pointer cancellation
-        if: runner.os == 'Windows'
-        run: cargo test -p gpui_windows --features test-support pointer_cancel --lib
-
-      - name: GPUI drag lifecycle tests
-        if: runner.os == 'Windows'
-        run: cargo test -p gpui drag --lib
+        run: cargo test -p gpui --features test-support --lib -- --test-threads=1
