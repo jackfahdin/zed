@@ -1096,7 +1096,10 @@ impl DirectXRenderPipelines {
 
 impl DirectComposition {
     pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
-        let comp_device = get_comp_device(dxgi_device)?;
+        Self::with_device(get_comp_device(dxgi_device)?, hwnd)
+    }
+
+    fn with_device(comp_device: IDCompositionDevice, hwnd: HWND) -> Result<Self> {
         let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, false) }?;
         let comp_visual = unsafe { comp_device.CreateVisual() }?;
 
@@ -1105,7 +1108,7 @@ impl DirectComposition {
             comp_target,
             alternate_target: None,
             comp_visual,
-            above_children: true,
+            above_children: false,
         })
     }
 
@@ -1213,18 +1216,12 @@ mod native_composition_tests {
                 // No swap chain, GPU readback, visible window, or remote server.
                 let device: IDCompositionDevice = DCompositionCreateDevice(None::<&IDXGIDevice>)
                     .context("create test composition device")?;
-                let mut composition = DirectComposition {
-                    comp_target: device
-                        .CreateTargetForHwnd(parent.0, true)
-                        .context("create test upper target")?,
-                    alternate_target: None,
-                    comp_visual: device.CreateVisual().context("create test visual")?,
-                    comp_device: device.clone(),
-                    above_children: true,
-                };
+                let mut composition = DirectComposition::with_device(device.clone(), parent.0)?;
+                assert!(!composition.above_children);
+                assert!(device.CreateTargetForHwnd(parent.0, false).is_err());
                 composition.comp_target.SetRoot(&composition.comp_visual)?;
                 device.Commit()?;
-                for above in [false, false, true, true, false, true] {
+                for above in [false, false, true, true, false, true, false] {
                     composition
                         .set_above_children(parent.0, above)
                         .with_context(|| format!("switch above_children to {above}"))?;
