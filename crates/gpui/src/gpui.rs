@@ -125,13 +125,13 @@ pub use color::*;
 pub use element::*;
 pub use elements::*;
 pub use executor::*;
+pub use file_promise::{PromisedFileDescriptor, PromisedFileDragPayload, PromisedFileProvider};
 pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };
-pub use file_promise::{PromisedFileDescriptor, PromisedFileDragPayload, PromisedFileProvider};
 pub use gpui_shared_string::*;
 pub use gpui_util::arc_cow::ArcCow;
 pub use input::*;

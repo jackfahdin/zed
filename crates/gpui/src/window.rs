@@ -11,21 +11,22 @@ use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
     Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
-    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, DynamicTexture, DynamicTextureId, Edges, Effect, Entity,
-    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-    Hsla, InputHandler, InputPreference, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
-    Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
-    MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
-    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
-    StrikethroughStyle, Style, SubpixelSprite, Subscription, SystemWindowTab,
-    SystemWindowTabController, TabStopMap, Task, TextInputConfiguration, TextInputStateChange,
-    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
-    Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControls, WindowDecorations, WindowInsets, WindowOptions, WindowParams, WindowTextSystem,
-    WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
+    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, DynamicTexture,
+    DynamicTextureId, Edges, Effect, Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global,
+    GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, InputPreference, IsZero, KeyBinding,
+    KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex,
+    Modifiers, ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent,
+    MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
+    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
+    PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
+    Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
+    ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
+    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, Task,
+    TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
+    TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
+    WindowInsets, WindowOptions, WindowParams, WindowTextSystem, WindowVisibility, point,
+    prelude::*, px, rems, size, transparent_black,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -4267,28 +4268,31 @@ impl Window {
                 let prepaint_start = self.prepaint_index();
                 let input = self.next_frame.deferred_draws[deferred_draw_ix].native_overlay_input;
                 self.with_native_overlay(input, |window| {
-                if let Some(mut element) = element {
-                    let ((), accessed_entities) = cx.detect_accessed_entities(|cx| {
-                        window.with_rendered_view(current_view, |window| {
-                            window.with_rem_size(Some(rem_size), |window| {
-                                window.with_absolute_element_offset(absolute_offset, |window| {
-                                    element.prepaint(window, cx);
+                    if let Some(mut element) = element {
+                        let ((), accessed_entities) = cx.detect_accessed_entities(|cx| {
+                            window.with_rendered_view(current_view, |window| {
+                                window.with_rem_size(Some(rem_size), |window| {
+                                    window.with_absolute_element_offset(
+                                        absolute_offset,
+                                        |window| {
+                                            element.prepaint(window, cx);
+                                        },
+                                    );
                                 });
                             });
                         });
-                    });
-                    window.next_frame.deferred_draws[deferred_draw_ix].accessed_entities =
-                        accessed_entities;
-                    window.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
-                } else {
-                    cx.entities.extend_accessed(
-                        window.next_frame.deferred_draws[deferred_draw_ix]
-                            .accessed_entities
-                            .iter()
-                            .copied(),
-                    );
-                    window.reuse_prepaint(prepaint_range);
-                }
+                        window.next_frame.deferred_draws[deferred_draw_ix].accessed_entities =
+                            accessed_entities;
+                        window.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
+                    } else {
+                        cx.entities.extend_accessed(
+                            window.next_frame.deferred_draws[deferred_draw_ix]
+                                .accessed_entities
+                                .iter()
+                                .copied(),
+                        );
+                        window.reuse_prepaint(prepaint_range);
+                    }
                 });
                 let prepaint_end = self.prepaint_index();
                 self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
@@ -4323,20 +4327,20 @@ impl Window {
             let paint_start = self.paint_index();
             let content_mask = deferred_draw.content_mask;
             self.with_native_overlay(deferred_draw.native_overlay_input, |window| {
-            if let Some(element) = deferred_draw.element.as_mut() {
-                let ((), accessed_entities) = cx.detect_accessed_entities(|cx| {
-                    window.with_rendered_view(deferred_draw.current_view, |window| {
-                        window.with_content_mask(content_mask, |window| {
-                            window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                                element.paint(window, cx);
-                            });
+                if let Some(element) = deferred_draw.element.as_mut() {
+                    let ((), accessed_entities) = cx.detect_accessed_entities(|cx| {
+                        window.with_rendered_view(deferred_draw.current_view, |window| {
+                            window.with_content_mask(content_mask, |window| {
+                                window.with_rem_size(Some(deferred_draw.rem_size), |window| {
+                                    element.paint(window, cx);
+                                });
+                            })
                         })
-                    })
-                });
-                deferred_draw.accessed_entities.extend(accessed_entities);
-            } else {
-                window.reuse_paint(deferred_draw.paint_range.clone());
-            }
+                    });
+                    deferred_draw.accessed_entities.extend(accessed_entities);
+                } else {
+                    window.reuse_paint(deferred_draw.paint_range.clone());
+                }
             });
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
@@ -8536,10 +8540,11 @@ mod tests {
         Context, DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths,
         FileDragPaths, FileDropEvent, FocusHandle, InputEvent as _, InteractiveElement as _,
         IntoElement, KeyDownEvent, Keystroke, LongPressEvent, MouseButton, MouseDownEvent,
-        MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, PlatformInput, Point, PointerCancelEvent, PointerCancelReason, Render, RequestFrameOptions,
-        ScaledPixels, StatefulInteractiveElement as _, Styled, TestAppContext, ThermalState,
-        TouchDragEvent, TouchEvent, TouchId, TouchPhase, Underline, UnderlineStyle, Window,
-        WindowAppearance, WindowOptions, canvas, div, hsla, point, px, size,
+        MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, PlatformInput, Point,
+        PointerCancelEvent, PointerCancelReason, Render, RequestFrameOptions, ScaledPixels,
+        StatefulInteractiveElement as _, Styled, TestAppContext, ThermalState, TouchDragEvent,
+        TouchEvent, TouchId, TouchPhase, Underline, UnderlineStyle, Window, WindowAppearance,
+        WindowOptions, canvas, div, hsla, point, px, size,
     };
 
     #[gpui::test]
