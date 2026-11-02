@@ -1113,7 +1113,8 @@ impl MacWindow {
             // NSCursor keeps hidden cursor styling scoped to this view's cursor rect.
             let hidden_cursor: *mut AnyObject = msg_send![class!(NSCursor), alloc];
             let hidden_image: *mut AnyObject = msg_send![class!(NSImage), alloc];
-            let hidden_image: *mut AnyObject = msg_send![hidden_image, initWithSize: NSSize::new(1., 1.)];
+            let hidden_image: *mut AnyObject =
+                msg_send![hidden_image, initWithSize: NSSize::new(1., 1.)];
             let hidden_cursor: *mut AnyObject = msg_send![
                 hidden_cursor,
                 initWithImage: hidden_image
@@ -2620,9 +2621,10 @@ extern "C" fn reset_cursor_rects(this: &AnyObject, _: Sel) {
         let _: () = msg_send![super(this, class!(NSView)), resetCursorRects];
 
         let window_state = get_window_state(this);
-        let state = window_state.lock();
-        let cursor_style = state.cursor_style;
-        let hidden_cursor = state.hidden_cursor;
+        let (cursor_style, hidden_cursor) = {
+            let state = window_state.lock();
+            (state.cursor_style, state.hidden_cursor)
+        };
 
         let cursor: *mut AnyObject = match cursor_style {
             CursorStyle::Hidden => hidden_cursor,
