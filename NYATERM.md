@@ -1,5 +1,28 @@
 # NyaTerm fork notes
 
+## Current fixed upstream sync (2026-11-03)
+
+Replayed the file export/promise, dynamic texture, cursor, gesture cancellation, modal owner, IME and native overlay patches onto `f4d40a2ccb88dd660abd81b85256c0ffe7e25efb`.
+Upstream's objc2 Metal migration now supplies fallible texture allocation; the obsolete raw Metal allocation workaround is replaced by that implementation, while DirectX allocation hardening remains.
+Stride-aware updates use the new validated Metal upload path.
+Deferred native overlays retain upstream entity-access tracking during both prepaint and paint.
+The old import-only formatting commit is replaced by rustfmt on the merged imports.
+
+DirectComposition starts with the actual lower target and `above_children = false`.
+The OS-backed regression now invokes the same constructor path and checks repeated lower/upper switching against Windows' per-layer target uniqueness.
+Alternate targets, failure rollback and device recovery remain intact.
+Cursor state is released before calling back into AppKit.
+The upstream ScrollEvent/ScrollSource input contract is preserved.
+
+Windows x64: `cargo test -p gpui --lib --features test-support -- --test-threads=1` passed 428 tests (2 ignored); the corresponding `gpui_windows` command passed 60 (1 subprocess fixture ignored); `cargo check -p gpui_platform` passed.
+The Windows workflow runs the complete suites serially.
+These tests cover native HWND overlays, constructor/layer switching, cursor ownership, IME, drag cancellation and texture state; they do not establish real RDP rendering, focus, pointer or clipboard acceptance.
+macOS Metal/file promises, Linux native backends and real server sessions have not been validated locally for this revision.
+Older validation sections describe their dated baselines.
+
+Previous published revision: `597ca983eb6facf1a8528a56204aeeb7c857eaf6`.
+Backup: `backup/nyaterm-20261103`.
+
 ## 2026-11-03 native child cursor ownership
 
 Preserve the target HWND from WM_SETCURSOR and return FALSE without setting
@@ -157,7 +180,7 @@ to GPUI on top of an unmodified upstream base.
 
 - Fork: <https://github.com/nyakang/zed>
 - Upstream: <https://github.com/zed-industries/zed>
-- Base revision: `042e0406d33cfb312ea7e5796870671e0afa7383` (upstream `main`, 2026-10-20)
+- Base revision: `f4d40a2ccb88dd660abd81b85256c0ffe7e25efb` (fixed upstream target, 2026-11-03)
 - Branch: `nyaterm`
 - Crates touched: `gpui`, `gpui_apple`, `gpui_wgpu`, `gpui_windows`,
   `gpui_linux`, `gpui_macos`, and `gpui_web`. Nothing else in the workspace is
