@@ -23,6 +23,24 @@ Older validation sections describe their dated baselines.
 Previous published revision: `597ca983eb6facf1a8528a56204aeeb7c857eaf6`.
 Backup: `backup/nyaterm-20261103`.
 
+## 2026-11-05 modal dialogs above native overlays
+
+`sync()` raised the input popup to `HWND_TOP` on every owner frame. Both overlay
+popups and a `WindowKind::Dialog` share one owner, so a modal layer's full-client
+input region sat above the dialog: its clicks went to the disabled owner and
+SetFocus pulled keyboard focus off the dialog, which left NyaTerm unusable once a
+native RDP session had enabled overlay mode. The visual and input popups are now
+placed directly above their owner (show first, since showing a hidden window
+raises it), the input popup is hidden while the owner is disabled, `WM_ENABLE`
+re-syncs, and forwarded pointer input is dropped for a disabled owner.
+
+Validation: Windows x64 `cargo test -p gpui_windows --lib --features test-support
+-- --test-threads=1` passed 61 tests, zero failed, one ignored, three consecutive
+runs. The new real-HWND regression fails on the previous `sync()` and checks a
+disabled owner, an owned dialog, and the overlay pair. `cargo check -p
+gpui_platform`, scoped rustfmt and `git diff --check` passed. Real RDP acceptance
+is performed in the consuming NyaTerm application.
+
 ## 2026-11-03 native child cursor ownership
 
 Preserve the target HWND from WM_SETCURSOR and return FALSE without setting
