@@ -202,7 +202,13 @@ impl WindowsWindowInner {
     ) -> LRESULT {
         if matches!(
             msg,
-            WM_MOVE | WM_SIZE | WM_WINDOWPOSCHANGED | WM_SHOWWINDOW | WM_ACTIVATE | WM_DPICHANGED
+            WM_MOVE
+                | WM_SIZE
+                | WM_WINDOWPOSCHANGED
+                | WM_SHOWWINDOW
+                | WM_ACTIVATE
+                | WM_DPICHANGED
+                | WM_ENABLE
         ) {
             if let Ok(overlay) = self.state.native_overlay.try_borrow() {
                 if let Some(overlay) = overlay.as_ref() {
