@@ -14,7 +14,11 @@ use windows::{
         Foundation::*,
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
-        UI::{Controls::WM_MOUSELEAVE, Input::KeyboardAndMouse::SetFocus, WindowsAndMessaging::*},
+        UI::{
+            Controls::WM_MOUSELEAVE,
+            Input::KeyboardAndMouse::{IsWindowEnabled, SetFocus},
+            WindowsAndMessaging::*,
+        },
     },
     core::w,
 };
@@ -243,34 +247,47 @@ impl NativeOverlayWindow {
             if !ClientToScreen(owner, &mut origin).as_bool() {
                 return;
             }
-            let _ = SetWindowPos(
-                self.hwnd(),
-                None,
-                origin.x,
-                origin.y,
-                rect.right,
-                rect.bottom,
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
-            );
+            // Stack owner < visual < input and nothing more. Other windows owned by
+            // the same owner -- a modal dialog in particular -- must stay above
+            // both, or a full-window input region swallows the dialog's clicks.
+            // Show before placing: showing a hidden window raises it to the top.
             let _ = ShowWindow(self.hwnd(), SW_SHOWNOACTIVATE);
-            let _ = SetWindowPos(
-                self.data.input_hwnd.get(),
-                Some(HWND_TOP),
-                origin.x,
-                origin.y,
-                rect.right,
-                rect.bottom,
-                SWP_NOACTIVATE | SWP_NOOWNERZORDER,
-            );
-            let _ = ShowWindow(
-                self.data.input_hwnd.get(),
-                if self.data.regions.borrow().is_empty() {
-                    SW_HIDE
-                } else {
-                    SW_SHOWNOACTIVATE
-                },
-            );
+            place_directly_above(self.hwnd(), owner, origin, rect);
+            let input = self.data.input_hwnd.get();
+            // A disabled owner is blocked by a platform modal; its overlay must
+            // not offer a way around that.
+            let accepts_input =
+                IsWindowEnabled(owner).as_bool() && !self.data.regions.borrow().is_empty();
+            if accepts_input {
+                let _ = ShowWindow(input, SW_SHOWNOACTIVATE);
+                place_directly_above(input, self.hwnd(), origin, rect);
+            } else {
+                let _ = ShowWindow(input, SW_HIDE);
+            }
         }
+    }
+}
+
+/// Move `hwnd` to `origin`/`size` and directly above `below` in the z-order.
+unsafe fn place_directly_above(hwnd: HWND, below: HWND, origin: POINT, size: RECT) {
+    unsafe {
+        let above = GetWindow(below, GW_HWNDPREV).unwrap_or_default();
+        let (insert_after, flags) = if above == hwnd {
+            (None, SWP_NOZORDER)
+        } else if above.is_invalid() {
+            (Some(HWND_TOP), SET_WINDOW_POS_FLAGS(0))
+        } else {
+            (Some(above), SET_WINDOW_POS_FLAGS(0))
+        };
+        let _ = SetWindowPos(
+            hwnd,
+            insert_after,
+            origin.x,
+            origin.y,
+            size.right,
+            size.bottom,
+            flags | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
     }
 }
 
@@ -411,7 +428,9 @@ unsafe fn overlay_message(
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN | WM_LBUTTONUP
         | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP | WM_LBUTTONDBLCLK | WM_RBUTTONDBLCLK
         | WM_MBUTTONDBLCLK | WM_MOUSEMOVE | WM_MOUSEWHEEL | WM_MOUSEHWHEEL | WM_MOUSELEAVE
-        | WM_SETCURSOR => {
+        | WM_SETCURSOR
+            if unsafe { IsWindowEnabled(data.owner) }.as_bool() =>
+        {
             if matches!(
                 message,
                 WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
@@ -451,7 +470,11 @@ mod tests {
     use super::NativeOverlayWindow;
     use gpui::{Bounds, point, px, size};
     use windows::{
-        Win32::{Foundation::HWND, Graphics::Gdi::*, UI::WindowsAndMessaging::*},
+        Win32::{
+            Foundation::HWND,
+            Graphics::Gdi::*,
+            UI::{Input::KeyboardAndMouse::EnableWindow, WindowsAndMessaging::*},
+        },
         core::w,
     };
 
@@ -499,6 +522,86 @@ mod tests {
             DestroyWindow(owner).expect("destroy overlay owner");
             assert!(overlay.hwnd().is_invalid());
             assert!(overlay.data.input_hwnd.get().is_invalid());
+            drop(overlay);
+        }
+    }
+
+    /// Whether `upper` is above `lower` in the global top-level z-order.
+    unsafe fn is_above(upper: HWND, lower: HWND) -> bool {
+        let mut next = upper;
+        loop {
+            next = unsafe { GetWindow(next, GW_HWNDNEXT) }.unwrap_or_default();
+            if next.is_invalid() {
+                return false;
+            }
+            if next == lower {
+                return true;
+            }
+        }
+    }
+
+    #[test]
+    fn a_modal_dialog_of_the_owner_stays_above_its_overlays_and_keeps_its_input() {
+        unsafe {
+            let owner = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!(""),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                200,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create modal-test owner");
+            let _ = ShowWindow(owner, SW_SHOWNOACTIVATE);
+            let overlay = NativeOverlayWindow::new(owner).expect("create native overlay pair");
+            let input = overlay.data.input_hwnd.get();
+
+            // What WindowKind::Dialog does: disable the owner, then show an owned popup.
+            let _ = EnableWindow(owner, false);
+            let dialog = CreateWindowExW(
+                WS_EX_DLGMODALFRAME,
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP | WS_CAPTION,
+                50,
+                50,
+                100,
+                100,
+                Some(owner),
+                None,
+                None,
+                None,
+            )
+            .expect("create owned dialog");
+            let _ = ShowWindow(dialog, SW_SHOWNOACTIVATE);
+
+            // The owner's next frame claims the whole client area for a modal layer.
+            overlay.set_regions(
+                &[Bounds::new(point(px(0.), px(0.)), size(px(200.), px(200.)))],
+                1.,
+            );
+            overlay.sync();
+            assert!(is_above(dialog, overlay.hwnd()));
+            assert!(is_above(overlay.hwnd(), owner));
+            assert!(
+                !IsWindowVisible(input).as_bool(),
+                "a disabled owner's overlay must not accept input"
+            );
+
+            let _ = EnableWindow(owner, true);
+            overlay.sync();
+            assert!(IsWindowVisible(input).as_bool());
+            assert!(is_above(input, overlay.hwnd()));
+            assert!(is_above(dialog, input));
+
+            DestroyWindow(dialog).expect("destroy owned dialog");
+            DestroyWindow(owner).expect("destroy modal-test owner");
             drop(overlay);
         }
     }
