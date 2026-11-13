@@ -16,10 +16,10 @@ mod native {
     use objc2::{
         MainThreadMarker, class, msg_send,
         rc::{Retained, Weak, autoreleasepool},
-        runtime::{AnyObject, Bool, ClassBuilder, Sel},
+        runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel},
         sel,
     };
-    use objc2_foundation::{NSPoint, NSString, NSUInteger};
+    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSUInteger};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use std::{cell::Cell, ffi::c_void, ptr, rc::Rc, time::Duration};
 
@@ -82,6 +82,14 @@ mod native {
             Application::with_platform(platform)
         };
         application.with_quit_mode(QuitMode::Explicit).run(move |cx: &mut App| {
+            autoreleasepool(|_| unsafe {
+                // AppKit can query the class before MacWindow attaches its state.
+                let class = AnyClass::get(c"GPUIView").expect("registered GPUIView");
+                let view: *mut AnyObject = msg_send![class, alloc];
+                let view: Retained<AnyObject> = msg_send![view,
+                    initWithFrame: NSRect::new(NSPoint::new(0., 0.), NSSize::new(100., 100.))];
+                query(&view);
+            });
             cx.spawn(async move |cx| {
                 let observer: Retained<AnyObject> = unsafe {
                     let mut builder = ClassBuilder::new(c"GPUIAccessibilityKvoObserver", class!(NSObject))

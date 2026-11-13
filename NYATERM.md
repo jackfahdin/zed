@@ -1,5 +1,19 @@
 # NyaTerm fork notes
 
+## 2026-11-13 accessibility before attachment and during deallocation
+
+Native accessibility selectors are installed on GPUIView itself now, so AppKit
+may call them before windowState is attached. Use an optional state lookup and
+fall back to NSView for that interval. Clear the ivar before releasing its Rc
+in dealloc so synchronous teardown queries cannot read a dangling attachment;
+partially initialized views may also deallocate safely. Add a native fixture
+that allocates, queries and releases a GPUIView without a MacWindow.
+
+Validation: touched-file rustfmt and git diff --check pass. GitHub's Actions
+permissions endpoint reports enabled, but workflow dispatch rejects execution
+with HTTP 422, "Actions has been disabled for this repository." Native macOS
+compilation and tests have not run; no Touch Bar or VoiceOver result is claimed.
+
 ## 2026-11-13 native accessibility lifecycle regression
 
 Add a harness-free macOS integration executable so AppKit runs on the process

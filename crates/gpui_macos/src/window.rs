@@ -2679,27 +2679,38 @@ unsafe fn is_gpui_window(window: *mut AnyObject) -> bool {
 }
 
 unsafe fn get_window_state(object: &AnyObject) -> Rc<Mutex<MacWindowState>> {
+    unsafe { try_window_state(object) }.expect("initialized GPUI window state")
+}
+
+unsafe fn try_window_state(object: &AnyObject) -> Option<Rc<Mutex<MacWindowState>>> {
     unsafe {
         let raw = *object
             .class()
-            .instance_variable(WINDOW_STATE_IVAR)
-            .expect("GPUI window state ivar")
+            .instance_variable(WINDOW_STATE_IVAR)?
             .load::<*mut c_void>(object);
+        if raw.is_null() {
+            return None;
+        }
         let rc1 = Rc::from_raw(raw as *mut Mutex<MacWindowState>);
         let rc2 = rc1.clone();
         mem::forget(rc1);
-        rc2
+        Some(rc2)
     }
 }
 
 unsafe fn drop_window_state(object: &AnyObject) {
     unsafe {
-        let raw = *object
+        let slot = object
             .class()
             .instance_variable(WINDOW_STATE_IVAR)
             .expect("GPUI window state ivar")
-            .load::<*mut c_void>(object);
-        Rc::from_raw(raw as *mut Mutex<MacWindowState>);
+            .load_ptr::<*mut c_void>(object);
+        // NSView teardown may synchronously query accessibility. Invalidate
+        // the attachment before releasing it, including partially initialized views.
+        let raw = ptr::replace(slot, ptr::null_mut());
+        if !raw.is_null() {
+            drop(Rc::from_raw(raw as *mut Mutex<MacWindowState>));
+        }
     }
 }
 
@@ -2729,7 +2740,7 @@ fn with_accesskit_state<R>(
     view: &AnyObject,
     f: impl FnOnce(&mut AccessKitState) -> R,
 ) -> Option<R> {
-    let window_state = unsafe { get_window_state(view) };
+    let window_state = unsafe { try_window_state(view) }?;
     let accesskit = window_state.try_lock()?.accesskit.clone()?;
     let mut accesskit = accesskit.try_borrow_mut().ok()?;
     Some(f(&mut accesskit))
