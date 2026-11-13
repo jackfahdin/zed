@@ -1,5 +1,25 @@
 # NyaTerm fork notes
 
+## 2026-11-13 Touch Bar KVO-safe accessibility teardown
+
+Backport zed-industries/zed#65186 (reviewed head
+`8880559852fb2fd2cb8e331cf4e8ac2983301407`) for nyakang/nyaterm#1262.
+Use accesskit_macos 0.26.3's plain Adapter on GPUIView and implement the
+children, focused-element and hit-test selectors on that view. Do not dynamically
+subclass or restore the content view's Objective-C class: doing so on close can
+corrupt AppKit Touch Bar KVO observation and abort the application.
+
+Preserve this fork's Rc window ownership, hidden-cursor cleanup and frame-source
+teardown. Clone the separate AccessKit state before invoking it, release the
+adapter borrow before raising native events, and fall back to NSView on query
+reentry or after teardown. The plain adapter keeps a weak view reference, so
+removing the subclassing adapter also removes its strong view ownership cycle.
+No public API or dependency version changes.
+
+Validation before publication: touched Rust files pass Rust 1.99.1 rustfmt;
+`git diff --check` passes. Native macOS compilation, lifecycle tests and physical
+Touch Bar/VoiceOver acceptance are pending; Windows cannot validate AppKit.
+
 ## 2026-11-06 reentrant native window-control hit testing
 
 Publish the current `WindowControlArea` through a window-owned
