@@ -1,5 +1,19 @@
 # NyaTerm fork notes
 
+## 2026-11-13 native accessibility lifecycle regression
+
+Add a harness-free macOS integration executable so AppKit runs on the process
+main thread. For twenty real windows per mode, exercise inactive and activated
+adapters, queries during an App borrow, tree rendering, KVO on GPUIView and its
+content view, queries after GPUI close, notification delivery/removal after
+close, and bounded weak-reference checks for native view release. Run again
+with accessibility forcibly disabled. No external SSH server is involved.
+The macOS branch CI runs both modes with a ten-minute timeout.
+
+Validation before publication: Rust 1.99.1 rustfmt and git diff --check pass on
+Windows. Native execution awaits macOS CI. Physical Touch Bar closure and
+VoiceOver focus/reading, plus NyaTerm upload integrity, remain manual acceptance.
+
 ## 2026-11-13 Touch Bar KVO-safe accessibility teardown
 
 Backport zed-industries/zed#65186 (reviewed head

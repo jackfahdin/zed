@@ -12,6 +12,11 @@ workspace = true
 path = "src/gpui_macos.rs"
 doctest = false
 
+# AppKit and AccessKit must be exercised on the process main thread.
+[[test]]
+name = "accessibility_lifecycle"
+harness = false
+
 [features]
 default = ["gpui/default"]
 bench-support = ["gpui/bench-support", "gpui_apple/bench-support"]

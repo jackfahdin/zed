@@ -74,6 +74,13 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo test -p gpui_macos file_promise --lib
 
+      - name: Native accessibility and KVO lifecycle
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          cargo test -p gpui_macos --test accessibility_lifecycle
+          cargo test -p gpui_macos --test accessibility_lifecycle -- --disabled
+
       - name: Native Windows regressions
         if: runner.os == 'Windows'
         run: cargo test -p gpui_windows --features test-support --lib -- --test-threads=1
