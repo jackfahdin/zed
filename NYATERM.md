@@ -899,3 +899,8 @@ Windows backend patch: DirectX R8 plane uploads and explicit YUV shader sampling
 `cargo test -p gpui_windows --features test-support --lib planar_video_tests`
 passed (1 native GPU test); vertex/pixel entry points also compiled with
 D3DCompile. The test uses an invisible native window and synthetic colors only.
+
+Metal backend patch: R8 video updates, capability reporting and the matching
+BT.601/709/2020-NCL shader path. Shader record fields are generated from the
+shared Rust definition by the existing cbindgen build. Static API/layout review
+completed; macOS compilation and native GPU acceptance require a macOS runner.

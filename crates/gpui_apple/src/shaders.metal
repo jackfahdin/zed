@@ -736,7 +736,7 @@ vertex PolychromeSpriteFragmentInput polychrome_sprite_vertex(
   float2 tile_position =
       to_tile_position(clipped.unit_vertex, sprite.tile, atlas_size);
   bool simple =
-      !has_rounded_corners(sprite.corner_radii) && sprite.grayscale == 0u;
+      !has_rounded_corners(sprite.corner_radii) && sprite.grayscale == 0u && sprite.video_height == 0u;
   return PolychromeSpriteFragmentInput{
       device_position,
       tile_position,
@@ -757,6 +757,24 @@ fragment float4 polychrome_sprite_fragment(
   }
 
   PolychromeSprite sprite = sprites[input.sprite_id];
+    if (sprite.video_height != 0u) {
+        float2 dimensions = float2(atlas_texture.get_width(), atlas_texture.get_height());
+        float2 origin = float2(sprite.tile.bounds.origin.x, sprite.tile.bounds.origin.y);
+        float2 size = float2(float(sprite.tile.bounds.size.width), float(sprite.video_height));
+        float2 chroma = ceil(size * 0.5);
+        float2 uv = (input.position.xy - float2(sprite.bounds.origin.x, sprite.bounds.origin.y)) / float2(sprite.bounds.size.width, sprite.bounds.size.height);
+        float2 yp = origin + clamp(uv * size, float2(0.5, 0.5), size - 0.5);
+        float2 cp = origin + clamp(uv * chroma, float2(0.5, 0.5), chroma - 0.5);
+        float y = atlas_texture.sample(atlas_texture_sampler, yp / dimensions).r;
+        float u = atlas_texture.sample(atlas_texture_sampler, (cp + float2(0.0, size.y)) / dimensions).r - 128.0 / 255.0;
+        float v = atlas_texture.sample(atlas_texture_sampler, (cp + float2(0.0, size.y + chroma.y)) / dimensions).r - 128.0 / 255.0;
+        if (sprite.video_full_range == 0u) { y = (y - 16.0 / 255.0) * (255.0 / 219.0); u *= 255.0 / 224.0; v *= 255.0 / 224.0; }
+        float kr = sprite.video_matrix == 1u ? 0.2126 : (sprite.video_matrix == 2u ? 0.2627 : 0.299);
+        float kb = sprite.video_matrix == 1u ? 0.0722 : (sprite.video_matrix == 2u ? 0.0593 : 0.114);
+        float kg = 1.0 - kr - kb;
+        color = float4(saturate(float3(y + 2.0 * (1.0 - kr) * v, y - 2.0 * kb * (1.0 - kb) / kg * u - 2.0 * kr * (1.0 - kr) / kg * v, y + 2.0 * (1.0 - kb) * u)), 1.0);
+    }
+
   if (sprite.grayscale) {
     float grayscale = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
     color.r = grayscale;
