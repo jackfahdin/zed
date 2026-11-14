@@ -391,6 +391,42 @@ pub struct Path {
 }
 
 impl Path {
+    /// Returns a translated copy without rebuilding the path's contours.
+    pub fn translated(&self, offset: Point<Pixels>) -> Self {
+        let offset = point(offset.x.0, offset.y.0);
+        let curves = self
+            .curves
+            .iter()
+            .map(|curve| PathCurve {
+                p0: curve.p0 + offset,
+                p1: curve.p1 + offset,
+                ..*curve
+            })
+            .collect::<Vec<_>>();
+        Self {
+            curves: curves.into(),
+            even_odd: self.even_odd,
+        }
+    }
+
+    /// The logical bounds of the path's monotone contours.
+    pub fn bounds(&self) -> crate::Bounds<Pixels> {
+        let Some(first) = self.curves.first() else {
+            return crate::Bounds::default();
+        };
+        let mut min = first.p0;
+        let mut max = first.p0;
+        for curve in self.curves.iter() {
+            for p in [curve.p0, curve.p1] {
+                min.x = min.x.min(p.x);
+                min.y = min.y.min(p.y);
+                max.x = max.x.max(p.x);
+                max.y = max.y.max(p.y);
+            }
+        }
+        crate::Bounds::from_corners(point(px(min.x), px(min.y)), point(px(max.x), px(max.y)))
+    }
+
     pub(crate) fn from_curves(curves: Vec<PathCurve>, fill_rule: FillRule) -> Self {
         Self {
             curves: curves.into(),
@@ -574,4 +610,32 @@ fn skia_path(path: &lyon_path::Path) -> Option<tiny_skia_path::Path> {
         }
     }
     builder.finish()
+}
+
+#[cfg(test)]
+mod translation_tests {
+    use super::{FillRule, Path, PathCurve};
+    use crate::{point, px};
+
+    #[test]
+    fn translation_preserves_curve_shape_winding_and_original() {
+        let curve = PathCurve::new(point(1., 2.), point(3., 6.), point(8., 10.), -1.);
+        let original = Path::from_curves(vec![curve], FillRule::EvenOdd);
+        let shifted = original.translated(point(px(20.), px(-4.)));
+        assert_eq!(original.curves[0], curve);
+        assert!(shifted.even_odd());
+        let translated = shifted.curves[0];
+        assert_eq!(translated.a, curve.a);
+        assert_eq!(translated.b, curve.b);
+        assert_eq!(translated.sign, curve.sign);
+        assert_eq!(translated.p0, point(21., -2.));
+        assert_eq!(translated.p1, point(28., 6.));
+        assert_eq!(shifted.bounds().size, original.bounds().size);
+        for scale in [1., 2.] {
+            let before = original.bin(scale).bounds();
+            let after = shifted.bin(scale).bounds();
+            assert_eq!(after.origin.x.0 - before.origin.x.0, 20. * scale);
+            assert_eq!(after.origin.y.0 - before.origin.y.0, -4. * scale);
+        }
+    }
 }
