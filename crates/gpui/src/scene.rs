@@ -62,6 +62,7 @@ pub struct Scene {
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
     animations: Vec<SpriteAnimation>,
+    animation_elapsed: Option<Duration>,
 }
 
 #[expect(missing_docs)]
@@ -81,6 +82,7 @@ impl Scene {
         self.polychrome_sprites.clear();
         self.surfaces.clear();
         self.animations.clear();
+        self.animation_elapsed = None;
     }
 
     /// Inserts a sprite that [`Self::advance_animations`] keeps moving. The
@@ -115,6 +117,7 @@ impl Scene {
     /// Moves every animated sprite to its pose at `elapsed` time on the app's
     /// synced animation clock, without the scene being rebuilt.
     pub(crate) fn advance_animations(&mut self, elapsed: Duration) {
+        self.animation_elapsed = Some(elapsed);
         for animation in &self.animations {
             let Some(sprite) = self.monochrome_sprites.get_mut(animation.sprite_index) else {
                 continue;
@@ -288,6 +291,12 @@ impl Scene {
         }
         owner.finish();
         overlay.finish();
+        // Platform windows split after the shared scene has advanced its clock.
+        // Paint operations retain the original pose, so apply that clock again.
+        if let Some(elapsed) = self.animation_elapsed {
+            owner.advance_animations(elapsed);
+            overlay.advance_animations(elapsed);
+        }
         (owner, overlay)
     }
 
@@ -824,7 +833,7 @@ mod native_overlay_tests {
     fn cached_primitives_keep_their_surface_and_layer_order() {
         let mut first = Scene::default();
         first.insert_primitive(quad(0.));
-        first.push_layer(quad(10.).bounds);
+        first.push_layer();
         let previous = first.set_native_overlay(true);
         first.insert_primitive(quad(10.));
         first.set_native_overlay(previous);
@@ -839,6 +848,57 @@ mod native_overlay_tests {
             assert_eq!(overlay.quads.len(), 1);
             assert_eq!(overlay.quads[0].bounds, quad(10.).bounds);
             assert!(base.quads[0].order <= base.quads[1].order);
+        }
+    }
+
+    #[test]
+    fn split_and_replayed_scenes_keep_sprite_animations() {
+        use crate::{
+            AtlasTextureId, AtlasTextureKind, AtlasTile, MonochromeSprite, SpriteAnimation,
+            SpriteAnimationId, TileId, TimedTransformation, Transformation, TransformationMatrix,
+            hsla, px,
+        };
+        use std::time::Duration;
+
+        let mut scene = Scene::default();
+        for overlay in [false, true] {
+            scene.set_native_overlay(overlay);
+            scene.insert_animated_sprite(
+                MonochromeSprite {
+                    order: 0,
+                    animation: SpriteAnimationId::NONE,
+                    tile: AtlasTile {
+                        texture_id: AtlasTextureId {
+                            index: 0,
+                            kind: AtlasTextureKind::Monochrome,
+                        },
+                        tile_id: TileId(0),
+                        padding: 0,
+                        bounds: Bounds::default(),
+                    },
+                    bounds: quad(0.).bounds,
+                    content_mask: quad(0.).content_mask,
+                    color: hsla(0., 0., 1., 1.),
+                    transformation: TransformationMatrix::default(),
+                },
+                SpriteAnimation::new(
+                    TimedTransformation::new(Duration::from_secs(1))
+                        .to(Transformation::default().with_alpha(0.)),
+                    point(px(0.), px(0.)),
+                    1.,
+                ),
+            );
+        }
+        let mut cached = Scene::default();
+        cached.replay(0..scene.len(), &scene);
+        cached.finish();
+        cached.advance_animations(Duration::from_millis(500));
+        let (mut owner, mut overlay) = cached.native_child_layers();
+        for target in [&mut owner, &mut overlay] {
+            assert_eq!(target.monochrome_sprites.len(), 1);
+            assert_eq!(target.animations.len(), 1);
+            assert!(target.animation_frame_interval().is_some());
+            assert_eq!(target.monochrome_sprites[0].color.a, 0.5);
         }
     }
 

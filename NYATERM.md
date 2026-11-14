@@ -1,5 +1,18 @@
 # NyaTerm fork notes
 
+## Current upstream sync (2026-11-14)
+
+- Upstream base: `f0fa51bb510fc91f6da7ec55f3e0f317f1f975ec` (`https://github.com/zed-industries/zed`, `main`).
+- Previous published revision: `fb876e285d05f9df66bd01fb60ce3d4fcdb946d4`.
+- Preserved backup: `backup/nyaterm-20261114`; branch: `nyaterm`.
+
+Retain the NyaTerm native overlay, input, accessibility, cursor and platform patches. Adapt recorded scene layers to upstream ordering and preserve animation IDs and elapsed poses when replaying/splitting native child surfaces. Use the upstream blanket IntoElement implementation. Expose Path bounds and translation without rebuilding monotone curves, preserving winding and binning at different scales. Drop the obsolete formatting-only patch.
+
+Windows, Rust 1.99.1: GPUI library tests with test-support passed (467 passed, two ignored), including path translation and animated overlay replay. Combined NyaTerm workspace check passed using local fork sources. macOS/AppKit and Linux native behavior remain untested on this Windows machine.
+
+Earlier dated sections below describe historical revisions and validation.
+
+
 ## 2026-11-13 accessibility before attachment and during deallocation
 
 Native accessibility selectors are installed on GPUIView itself now, so AppKit
