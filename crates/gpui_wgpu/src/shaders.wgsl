@@ -1423,6 +1423,10 @@ struct PolychromeSprite {
     bounds: Bounds,
     content_mask: Bounds,
     corner_radii: Corners,
+    video_height: u32,
+    video_matrix: u32,
+    video_full_range: u32,
+    video_pad: u32,
 }
 
 
@@ -1442,7 +1446,7 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     let clipped = clip_to_mask(unit_vertex, sprite.bounds, sprite.content_mask);
     out.position = to_device_position_impl(clipped.position);
     out.tile_position = to_tile_position(clipped.unit_vertex, sprite.tile);
-    let simple = !has_rounded_corners(sprite.corner_radii) && sprite.grayscale == 0u;
+    let simple = !has_rounded_corners(sprite.corner_radii) && sprite.grayscale == 0u && sprite.video_height == 0u;
     out.sprite_id = instance_id | select(0u, SIMPLE_PRIMITIVE_FLAG, simple);
     out.opacity = sprite.opacity;
     return out;
@@ -1456,6 +1460,24 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
     }
 
     let sprite = load_poly_sprite(input.sprite_id);
+    if (sprite.video_height != 0u) {
+        let dimensions = vec2<f32>(textureDimensions(t_sprite));
+        let origin = vec2<f32>(sprite.tile.bounds.origin);
+        let size = vec2<f32>(f32(sprite.tile.bounds.size.x), f32(sprite.video_height));
+        let chroma = ceil(size * 0.5);
+        let uv = (input.position.xy - sprite.bounds.origin) / sprite.bounds.size;
+        let yp = origin + clamp(uv * size, vec2<f32>(0.5), size - vec2<f32>(0.5));
+        let cp = origin + clamp(uv * chroma, vec2<f32>(0.5), chroma - vec2<f32>(0.5));
+        var y = textureSampleLevel(t_sprite, s_sprite, yp / dimensions, 0.0).r;
+        var u = textureSampleLevel(t_sprite, s_sprite, (cp + vec2<f32>(0.0, size.y)) / dimensions, 0.0).r - 128.0 / 255.0;
+        var v = textureSampleLevel(t_sprite, s_sprite, (cp + vec2<f32>(0.0, size.y + chroma.y)) / dimensions, 0.0).r - 128.0 / 255.0;
+        if (sprite.video_full_range == 0u) { y = (y - 16.0 / 255.0) * (255.0 / 219.0); u *= 255.0 / 224.0; v *= 255.0 / 224.0; }
+        let kr = select(select(0.299, 0.2627, sprite.video_matrix == 2u), 0.2126, sprite.video_matrix == 1u);
+        let kb = select(select(0.114, 0.0593, sprite.video_matrix == 2u), 0.0722, sprite.video_matrix == 1u);
+        let kg = 1.0 - kr - kb;
+        color = vec4<f32>(clamp(vec3<f32>(y + 2.0 * (1.0 - kr) * v, y - 2.0 * kb * (1.0 - kb) / kg * u - 2.0 * kr * (1.0 - kr) / kg * v, y + 2.0 * (1.0 - kb) * u), vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    }
+
     if (sprite.grayscale != 0u) {
         color = vec4<f32>(vec3<f32>(dot(color.rgb, GRAYSCALE_FACTORS)), color.a);
     }

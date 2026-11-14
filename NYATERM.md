@@ -904,3 +904,8 @@ Metal backend patch: R8 video updates, capability reporting and the matching
 BT.601/709/2020-NCL shader path. Shader record fields are generated from the
 shared Rust definition by the existing cbindgen build. Static API/layout review
 completed; macOS compilation and native GPU acceptance require a macOS runner.
+
+wgpu backend patch: R8 video uploads and WGSL conversion, including the WebGL
+record reader. `cargo test -p gpui_wgpu --lib shader` passed all four tests on
+Windows: storage/WebGL/subpixel shader validation and CPU/shader record sizes.
+Linux native rendering remains an outstanding platform acceptance item.
