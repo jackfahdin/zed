@@ -2282,3 +2282,147 @@ mod dxgi {
         ))
     }
 }
+
+#[cfg(all(test, feature = "test-support"))]
+mod planar_video_tests {
+    use crate::directx_devices::DirectXDevices;
+    use crate::directx_renderer::DirectXRenderer;
+    use gpui::{
+        AtlasKey, Bounds, ContentMask, Corners, DevicePixels, DynamicTextureId, PlatformAtlas,
+        Point, PolychromeSprite, Scene, Size, WindowBackgroundAppearance,
+    };
+    use gpui_util::ResultExt;
+    use windows::{
+        Win32::{
+            Foundation::HWND,
+            System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
+            UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
+            },
+        },
+        core::w,
+    };
+    #[test]
+    fn native_planar_video_preserves_range_matrix_clipping_and_opacity() -> anyhow::Result<()> {
+        std::thread::spawn(|| -> anyhow::Result<()> {
+            struct Apartment;
+            impl Drop for Apartment {
+                fn drop(&mut self) {
+                    unsafe {
+                        CoUninitialize();
+                    }
+                }
+            }
+            struct Parent(HWND);
+            impl Drop for Parent {
+                fn drop(&mut self) {
+                    unsafe { DestroyWindow(self.0) }.log_err();
+                }
+            }
+            unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+            }
+            let _apartment = Apartment;
+            let parent = Parent(unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("GPUI video test"),
+                    WS_OVERLAPPEDWINDOW,
+                    0,
+                    0,
+                    64,
+                    64,
+                    None,
+                    None,
+                    None,
+                    None,
+                )?
+            });
+            let devices = DirectXDevices::new()?;
+            let mut renderer = DirectXRenderer::new(parent.0, &devices, true)?;
+            renderer.resize(Size::new(DevicePixels(16), DevicePixels(16)))?;
+            let atlas = renderer.atlas.clone();
+            let key = AtlasKey::VideoTexture(DynamicTextureId(100));
+            let tile = atlas
+                .get_or_insert_with(key.clone(), &mut || {
+                    Ok(Some((
+                        Size::new(DevicePixels(5), DevicePixels(7)),
+                        vec![0; 35].into(),
+                    )))
+                })?
+                .ok_or_else(|| anyhow::anyhow!("missing tile"))?;
+            for (matrix, full_range, y, u, v, opacity, expected) in [
+                (0, 0, 16, 128, 128, 1.0, [0, 0, 0, 255]),
+                (0, 0, 235, 128, 128, 1.0, [255, 255, 255, 255]),
+                (1, 0, 63, 102, 240, 1.0, [255, 1, 0, 255]),
+                (2, 1, 0, 128, 128, 1.0, [0, 0, 0, 255]),
+                (0, 0, 16, 128, 128, 0.5, [128, 128, 128, 255]),
+            ] {
+                for (top, width, height, value) in [(0, 5, 3, y), (3, 3, 2, u), (5, 3, 2, v)] {
+                    atlas.update(
+                        &key,
+                        Bounds::new(
+                            Point::new(DevicePixels(0), DevicePixels(top)),
+                            Size::new(DevicePixels(width), DevicePixels(height)),
+                        ),
+                        &vec![value; (width * height) as usize],
+                        width as u32,
+                    )?;
+                }
+                let bounds = Bounds::new(
+                    Point::new(0.0.into(), 0.0.into()),
+                    Size::new(16.0.into(), 16.0.into()),
+                );
+                let mut scene = Scene::default();
+                scene.insert_primitive(PolychromeSprite {
+                    order: 0,
+                    pad: 0,
+                    tile,
+                    grayscale: false.into(),
+                    opacity,
+                    bounds,
+                    content_mask: ContentMask {
+                        bounds: Bounds::new(
+                            Point::new(8.0.into(), 0.0.into()),
+                            Size::new(8.0.into(), 16.0.into()),
+                        ),
+                    },
+                    corner_radii: Corners::default(),
+                    video_height: 3,
+                    video_matrix: matrix,
+                    video_full_range: full_range,
+                    video_pad: 0,
+                });
+                scene.finish();
+                let image = renderer.render_to_image(&scene, WindowBackgroundAppearance::Opaque)?;
+                assert_eq!(image.get_pixel(2, 8).0, [255; 4]);
+                let actual = image.get_pixel(12, 8).0;
+                assert!(
+                    actual
+                        .into_iter()
+                        .zip(expected)
+                        .all(|(a, b)| a.abs_diff(b) <= 3),
+                    "matrix={matrix}, full={full_range}: {actual:?} != {expected:?}"
+                );
+            }
+            atlas.remove(&key);
+            assert!(
+                atlas
+                    .update(
+                        &key,
+                        Bounds::new(
+                            Point::default(),
+                            Size::new(DevicePixels(1), DevicePixels(1))
+                        ),
+                        &[0],
+                        1
+                    )
+                    .is_err()
+            );
+            Ok(())
+        })
+        .join()
+        .map_err(|_| anyhow::anyhow!("video test thread panicked"))?
+    }
+}

@@ -1333,6 +1333,10 @@ struct PolychromeSprite {
     Bounds bounds;
     Bounds content_mask;
     Corners corner_radii;
+    uint video_height;
+    uint video_matrix;
+    uint video_full_range;
+    uint video_pad;
 };
 
 struct PolychromeSpriteFragmentInput {
@@ -1355,7 +1359,7 @@ PolychromeSpriteFragmentInput polychrome_sprite_vertex(uint vertex_id: SV_Vertex
     PolychromeSpriteFragmentInput output;
     output.position = device_position;
     output.tile_position = tile_position;
-    bool simple = !has_rounded_corners(sprite.corner_radii) && sprite.grayscale == 0u;
+    bool simple = !has_rounded_corners(sprite.corner_radii) && sprite.grayscale == 0u && sprite.video_height == 0u;
     output.sprite_id = sprite_id | (simple ? SIMPLE_PRIMITIVE_FLAG : 0u);
     output.opacity = sprite.opacity;
     return output;
@@ -1368,6 +1372,24 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     }
 
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
+    if (sprite.video_height != 0u) {
+        float2 dimensions; t_sprite.GetDimensions(dimensions.x, dimensions.y);
+        float2 origin = float2(sprite.tile.bounds.origin);
+        float2 size = float2(float(sprite.tile.bounds.size.x), float(sprite.video_height));
+        float2 chroma = ceil(size * 0.5);
+        float2 uv = (input.position.xy - sprite.bounds.origin) / sprite.bounds.size;
+        float2 yp = origin + clamp(uv * size, float2(0.5, 0.5), size - 0.5);
+        float2 cp = origin + clamp(uv * chroma, float2(0.5, 0.5), chroma - 0.5);
+        float y = t_sprite.Sample(s_sprite, yp / dimensions).r;
+        float u = t_sprite.Sample(s_sprite, (cp + float2(0.0, size.y)) / dimensions).r - 128.0 / 255.0;
+        float v = t_sprite.Sample(s_sprite, (cp + float2(0.0, size.y + chroma.y)) / dimensions).r - 128.0 / 255.0;
+        if (sprite.video_full_range == 0u) { y = (y - 16.0 / 255.0) * (255.0 / 219.0); u *= 255.0 / 224.0; v *= 255.0 / 224.0; }
+        float kr = sprite.video_matrix == 1u ? 0.2126 : (sprite.video_matrix == 2u ? 0.2627 : 0.299);
+        float kb = sprite.video_matrix == 1u ? 0.0722 : (sprite.video_matrix == 2u ? 0.0593 : 0.114);
+        float kg = 1.0 - kr - kb;
+        color = float4(saturate(float3(y + 2.0 * (1.0 - kr) * v, y - 2.0 * kb * (1.0 - kb) / kg * u - 2.0 * kr * (1.0 - kr) / kg * v, y + 2.0 * (1.0 - kb) * u)), 1.0);
+    }
+
     if (sprite.grayscale != 0u) {
         color.rgb = dot(color.rgb, GRAYSCALE_FACTORS);
     }

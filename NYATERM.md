@@ -894,3 +894,8 @@ nyaterm-app` passed on Windows/MSVC with the local fork override; native DirectX
 pixel readback covers limited/full range, BT.709 red, opacity and clipping.
 WGSL storage/WebGL validation and record-size checks pass. Metal runtime and
 Linux device execution remain pending; no hardware decoding is introduced.
+
+Windows backend patch: DirectX R8 plane uploads and explicit YUV shader sampling.
+`cargo test -p gpui_windows --features test-support --lib planar_video_tests`
+passed (1 native GPU test); vertex/pixel entry points also compiled with
+D3DCompile. The test uses an invisible native window and synthetic colors only.
