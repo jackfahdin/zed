@@ -1193,6 +1193,11 @@ pub struct PolychromeSprite {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
+    /// Zero for BGRA sprites; luma height for planar video.
+    pub video_height: u32,
+    pub video_matrix: u32,
+    pub video_full_range: u32,
+    pub video_pad: u32,
 }
 
 impl From<PolychromeSprite> for Primitive {

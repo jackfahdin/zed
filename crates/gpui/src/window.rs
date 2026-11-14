@@ -4380,28 +4380,31 @@ impl Window {
                 let prepaint_start = self.prepaint_index();
                 let input = self.next_frame.deferred_draws[deferred_draw_ix].native_overlay_input;
                 self.with_native_overlay(input, |window| {
-                if let Some(mut element) = element {
-                    let ((), accessed_entities) = cx.detect_accessed_entities(|cx| {
-                        window.with_rendered_view(current_view, |window| {
-                            window.with_rem_size(Some(rem_size), |window| {
-                                window.with_absolute_element_offset(absolute_offset, |window| {
-                                    element.prepaint(window, cx);
+                    if let Some(mut element) = element {
+                        let ((), accessed_entities) = cx.detect_accessed_entities(|cx| {
+                            window.with_rendered_view(current_view, |window| {
+                                window.with_rem_size(Some(rem_size), |window| {
+                                    window.with_absolute_element_offset(
+                                        absolute_offset,
+                                        |window| {
+                                            element.prepaint(window, cx);
+                                        },
+                                    );
                                 });
                             });
                         });
-                    });
-                    window.next_frame.deferred_draws[deferred_draw_ix].accessed_entities =
-                        accessed_entities;
-                    window.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
-                } else {
-                    cx.entities.extend_accessed(
-                        window.next_frame.deferred_draws[deferred_draw_ix]
-                            .accessed_entities
-                            .iter()
-                            .copied(),
-                    );
-                    window.reuse_prepaint(prepaint_range);
-                }
+                        window.next_frame.deferred_draws[deferred_draw_ix].accessed_entities =
+                            accessed_entities;
+                        window.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
+                    } else {
+                        cx.entities.extend_accessed(
+                            window.next_frame.deferred_draws[deferred_draw_ix]
+                                .accessed_entities
+                                .iter()
+                                .copied(),
+                        );
+                        window.reuse_prepaint(prepaint_range);
+                    }
                 });
                 let prepaint_end = self.prepaint_index();
                 self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
@@ -4436,20 +4439,20 @@ impl Window {
             let paint_start = self.paint_index();
             let content_mask = deferred_draw.content_mask;
             self.with_native_overlay(deferred_draw.native_overlay_input, |window| {
-            if let Some(element) = deferred_draw.element.as_mut() {
-                let ((), accessed_entities) = cx.detect_accessed_entities(|cx| {
-                    window.with_rendered_view(deferred_draw.current_view, |window| {
-                        window.with_content_mask(content_mask, |window| {
-                            window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                                element.paint(window, cx);
-                            });
+                if let Some(element) = deferred_draw.element.as_mut() {
+                    let ((), accessed_entities) = cx.detect_accessed_entities(|cx| {
+                        window.with_rendered_view(deferred_draw.current_view, |window| {
+                            window.with_content_mask(content_mask, |window| {
+                                window.with_rem_size(Some(deferred_draw.rem_size), |window| {
+                                    element.paint(window, cx);
+                                });
+                            })
                         })
-                    })
-                });
-                deferred_draw.accessed_entities.extend(accessed_entities);
-            } else {
-                window.reuse_paint(deferred_draw.paint_range.clone());
-            }
+                    });
+                    deferred_draw.accessed_entities.extend(accessed_entities);
+                } else {
+                    window.reuse_paint(deferred_draw.paint_range.clone());
+                }
             });
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
@@ -5514,6 +5517,10 @@ impl Window {
             let opacity = self.element_opacity();
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
+                video_height: 0,
+                video_matrix: 0,
+                video_full_range: 0,
+                video_pad: 0,
                 order: 0,
                 pad: 0,
                 grayscale: false.into(),
@@ -5708,6 +5715,10 @@ impl Window {
         let opacity = self.element_opacity();
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
+            video_height: 0,
+            video_matrix: 0,
+            video_full_range: 0,
+            video_pad: 0,
             order: 0,
             pad: 0,
             grayscale: grayscale.into(),
@@ -5718,6 +5729,115 @@ impl Window {
             opacity,
         });
         Ok(())
+    }
+
+    /// Whether this window has the planar-video shader path.
+    pub fn supports_video_textures(&self) -> bool {
+        self.sprite_atlas.supports_video_textures()
+    }
+
+    /// Creates a reusable I420 texture. Input is tightly packed Y, U, V, with
+    /// ceil-divided chroma dimensions. Planes share one R8 allocation to retain
+    /// ordinary sprite batching, clipping, and ordering on every backend.
+    pub fn create_video_texture(
+        &mut self,
+        size: Size<DevicePixels>,
+        bytes: &[u8],
+    ) -> Result<crate::VideoTexture> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT_VIDEO_ID: AtomicUsize = AtomicUsize::new(0);
+        let (width, height, _, chroma_height) = video_layout(size, bytes.len())?;
+        let packed_height = height + 2 * chroma_height;
+        let texture = crate::VideoTexture {
+            id: DynamicTextureId(NEXT_VIDEO_ID.fetch_add(1, Ordering::Relaxed)),
+            size,
+        };
+        let allocation = Size::new(
+            DevicePixels(width as i32),
+            DevicePixels(packed_height as i32),
+        );
+        let zeros = vec![0; width as usize * packed_height as usize];
+        self.sprite_atlas
+            .get_or_insert_with(crate::AtlasKey::VideoTexture(texture.id), &mut || {
+                Ok(Some((allocation, Cow::Borrowed(&zeros))))
+            })?
+            .context("video texture allocation failed")?;
+        if let Err(error) = self.update_video_texture(texture, bytes) {
+            self.remove_video_texture(texture);
+            return Err(error);
+        }
+        Ok(texture)
+    }
+
+    /// Updates the three planes without converting or expanding pixels on CPU.
+    pub fn update_video_texture(
+        &mut self,
+        texture: crate::VideoTexture,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let (width, height, chroma_width, chroma_height) = video_layout(texture.size, bytes.len())?;
+        let mut offset = 0;
+        for (top, plane_width, plane_height) in [
+            (0, width, height),
+            (height, chroma_width, chroma_height),
+            (height + chroma_height, chroma_width, chroma_height),
+        ] {
+            let length = plane_width as usize * plane_height as usize;
+            let plane = bytes
+                .get(offset..offset + length)
+                .context("invalid video plane")?;
+            self.sprite_atlas.update(
+                &crate::AtlasKey::VideoTexture(texture.id),
+                Bounds::new(
+                    Point::new(DevicePixels(0), DevicePixels(top as i32)),
+                    Size::new(
+                        DevicePixels(plane_width as i32),
+                        DevicePixels(plane_height as i32),
+                    ),
+                ),
+                plane,
+                plane_width,
+            )?;
+            offset += length;
+        }
+        Ok(())
+    }
+
+    /// Paints video with explicit source matrix and range. Sampling is clamped
+    /// independently to each plane, so atlas neighbors cannot bleed into it.
+    pub fn paint_video_texture(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        texture: crate::VideoTexture,
+        matrix: crate::VideoColorMatrix,
+        full_range: bool,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+        let tile = self
+            .sprite_atlas
+            .get_or_insert_with(crate::AtlasKey::VideoTexture(texture.id), &mut || Ok(None))?
+            .context("video texture was removed")?;
+        self.next_frame.scene.insert_primitive(PolychromeSprite {
+            order: 0,
+            pad: 0,
+            tile,
+            grayscale: false.into(),
+            opacity: self.element_opacity(),
+            bounds: self.snap_bounds(bounds),
+            content_mask: self.snapped_content_mask(),
+            corner_radii: Default::default(),
+            video_height: texture.size.height.0 as u32,
+            video_matrix: matrix as u32,
+            video_full_range: u32::from(full_range),
+            video_pad: 0,
+        });
+        Ok(())
+    }
+
+    /// Releases this window's video allocation.
+    pub fn remove_video_texture(&mut self, texture: crate::VideoTexture) {
+        self.sprite_atlas
+            .remove(&crate::AtlasKey::VideoTexture(texture.id));
     }
 
     /// Allocates a mutable BGRA8 texture. `bytes_per_row` may include source padding.
@@ -5790,6 +5910,10 @@ impl Window {
             })?
             .context("dynamic texture was removed")?;
         self.next_frame.scene.insert_primitive(PolychromeSprite {
+            video_height: 0,
+            video_matrix: 0,
+            video_full_range: 0,
+            video_pad: 0,
             order: 0,
             pad: 0,
             grayscale: false.into(),
@@ -8734,12 +8858,10 @@ mod tests {
         ExternalPaths, FileDragPaths, FileDropEvent, FocusHandle, InputEvent as _,
         InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, LongPressEvent, MouseButton,
         MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, PlatformInput, Point,
-        Render, RequestFrameOptions, ScaledPixels, StatefulInteractiveElement as _, Styled,
-        TestAppContext, ThermalState, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Underline,
-        UnderlineStyle, Window, WindowAppearance, WindowOptions, canvas, div, hsla, point, px,
-        size,
-        PointerCancelEvent, PointerCancelReason,
-        VisualTestContext, WindowControlArea,
+        PointerCancelEvent, PointerCancelReason, Render, RequestFrameOptions, ScaledPixels,
+        StatefulInteractiveElement as _, Styled, TestAppContext, ThermalState, TouchDragEvent,
+        TouchEvent, TouchId, TouchPhase, Underline, UnderlineStyle, VisualTestContext, Window,
+        WindowAppearance, WindowControlArea, WindowOptions, canvas, div, hsla, point, px, size,
     };
 
     #[gpui::test]
@@ -11826,5 +11948,34 @@ mod native_overlay_tests {
                 assert_eq!(window.native_overlay_input, None);
             })
             .unwrap();
+    }
+}
+
+fn video_layout(size: Size<DevicePixels>, length: usize) -> Result<(u32, u32, u32, u32)> {
+    let width = u32::try_from(size.width.0)?;
+    let height = u32::try_from(size.height.0)?;
+    anyhow::ensure!(
+        (1..=8192).contains(&width) && (1..=8192).contains(&height),
+        "invalid video dimensions"
+    );
+    let chroma_width = width.div_ceil(2);
+    let chroma_height = height.div_ceil(2);
+    let expected =
+        width as usize * height as usize + 2 * chroma_width as usize * chroma_height as usize;
+    anyhow::ensure!(length == expected, "invalid video plane length");
+    Ok((width, height, chroma_width, chroma_height))
+}
+
+#[cfg(test)]
+mod video_layout_tests {
+    use super::video_layout;
+    use crate::{DevicePixels, Size};
+    #[test]
+    fn odd_video_planes_require_exact_bounded_payload() {
+        let size = Size::new(DevicePixels(5), DevicePixels(3));
+        assert_eq!(video_layout(size, 27).unwrap(), (5, 3, 3, 2));
+        assert!(video_layout(size, 26).is_err());
+        assert!(video_layout(size, 28).is_err());
+        assert!(video_layout(Size::new(DevicePixels(-1), DevicePixels(1)), 1).is_err());
     }
 }

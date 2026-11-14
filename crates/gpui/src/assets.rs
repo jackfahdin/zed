@@ -149,3 +149,21 @@ mod tests {
         let _ = format!("{image:?}");
     }
 }
+
+/// Mutable planar 8-bit I420 video, owned by the window which created it.
+#[derive(Clone, Copy, Debug)]
+pub struct VideoTexture {
+    pub(crate) id: DynamicTextureId,
+    pub(crate) size: crate::Size<crate::DevicePixels>,
+}
+/// Non-constant-luminance YUV conversion matrix.
+#[derive(Clone, Copy, Debug)]
+#[repr(u32)]
+pub enum VideoColorMatrix {
+    /// ITU-R BT.601 (also the default for unspecified sources).
+    Bt601 = 0,
+    /// ITU-R BT.709.
+    Bt709 = 1,
+    /// ITU-R BT.2020 non-constant luminance.
+    Bt2020 = 2,
+}

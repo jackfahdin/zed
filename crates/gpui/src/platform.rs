@@ -1822,6 +1822,8 @@ pub enum AtlasKey {
     Svg(RenderSvgParams),
     Image(RenderImageParams),
     DynamicTexture(DynamicTextureId),
+    /// Planar video planes in a single-channel allocation.
+    VideoTexture(DynamicTextureId),
 }
 
 impl AtlasKey {
@@ -1840,6 +1842,7 @@ impl AtlasKey {
             AtlasKey::Svg(_) => AtlasTextureKind::Monochrome,
             AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
             AtlasKey::DynamicTexture(_) => AtlasTextureKind::Polychrome,
+            AtlasKey::VideoTexture(_) => AtlasTextureKind::Monochrome,
         }
     }
 }
@@ -1864,6 +1867,11 @@ impl From<RenderImageParams> for AtlasKey {
 
 #[expect(missing_docs)]
 pub trait PlatformAtlas {
+    /// True when the backend implements planar-video sprite sampling.
+    fn supports_video_textures(&self) -> bool {
+        false
+    }
+
     /// The builder runs with the atlas locked and must not re-enter the same atlas.
     fn get_or_insert_with<'a>(
         &self,
