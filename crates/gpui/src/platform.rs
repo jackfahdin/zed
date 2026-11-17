@@ -38,12 +38,12 @@ pub(crate) type PlatformScreenCaptureFrame =
 
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds, Corners,
-    DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, DynamicTextureId, Edges, ExternalDragPayload, Font,
-    FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource, Keymap,
-    LineLayout, MissingGlyphSink, Pixels, PlatformGestures, PlatformInput, Point, Priority,
-    RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Scene, ShapedGlyph,
-    ShapedRun, SharedString, Size, SvgRenderer, SystemWindowTab, Task, Window, WindowControlArea,
-    hash, point, px, size,
+    DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, DynamicTextureId, Edges,
+    ExternalDragPayload, Font, FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs,
+    Hsla, ImageSource, Keymap, LineLayout, MissingGlyphSink, Pixels, PlatformGestures,
+    PlatformInput, Point, Priority, RenderGlyphParams, RenderImage, RenderImageParams,
+    RenderSvgParams, Scene, ShapedGlyph, ShapedRun, SharedString, Size, SvgRenderer,
+    SystemWindowTab, Task, Window, WindowControlArea, hash, point, px, size,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
@@ -623,6 +623,19 @@ pub trait Platform: 'static {
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
     fn write_to_clipboard(&self, item: ClipboardItem);
+
+    /// Publish a repeatable native file copy source. Providers run off the UI thread.
+    fn write_file_clipboard(
+        &self,
+        _provider: Arc<dyn Fn() -> anyhow::Result<ExternalDragPayload> + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("native file clipboard is unavailable")
+    }
+
+    /// Changes whenever the system clipboard is replaced, including identical content.
+    fn clipboard_revision(&self) -> Option<u64> {
+        None
+    }
 
     /// Reads the clipboard, resolving once its contents are available.
     ///

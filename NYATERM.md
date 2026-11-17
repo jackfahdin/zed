@@ -909,3 +909,21 @@ wgpu backend patch: R8 video uploads and WGSL conversion, including the WebGL
 record reader. `cargo test -p gpui_wgpu --lib shader` passed all four tests on
 Windows: storage/WebGL/subpixel shader validation and CPU/shader record sizes.
 Linux native rendering remains an outstanding platform acceptance item.
+
+
+## Windows deferred file clipboard — 2026-11-17
+
+Expose a repeatable file clipboard provider and platform clipboard revision.
+Windows publishes copy-only OLE data on its own STA and reuses bounded virtual
+file streams. Format probes do not enumerate remote trees. Each paste has an
+independent delivery session; replacing the clipboard retains active streams
+until release (with the existing idle timeout). Ordinary clipboard APIs and
+existing native drag sources retain their behavior. Non-Windows platforms
+report unsupported for the new publication API.
+
+Validation: consuming NyaTerm with the local fork override on Windows/MSVC:
+`cargo test -p gpui_windows --lib external_drag_tests` passed 15 tests, including
+new repeated-paste and metadata-only directory-probe regressions. The NyaTerm
+integration compiled with `cargo check -p nyaterm-desktop --tests` before the
+final UI integration pass. Explorer end-to-end paste with a live SFTP source
+has not been performed; remote-source acceptance remains required.

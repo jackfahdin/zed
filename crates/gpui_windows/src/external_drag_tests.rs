@@ -517,3 +517,84 @@ fn native_idle_expiry_excludes_active_operations_and_user_pauses() {
     Arc::get_mut(&mut session).unwrap().payload = ExternalDragPayload::VirtualFiles(payload);
     assert!(!session.idle_expired());
 }
+
+#[test]
+fn clipboard_repeated_pastes_create_fresh_streams_and_only_offer_copy() {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let counter = opens.clone();
+    let (data, _) = crate::external_drag::clipboard_data_object(Arc::new(move || {
+        let file = Arc::new(MockSource {
+            content: Arc::new(b"clipboard".to_vec()),
+            opens: counter.clone(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            fail: false,
+        });
+        Ok(ExternalDragPayload::VirtualFiles(
+            VirtualFileDragPayload::new([descriptor("test.txt", file)])?,
+        ))
+    }));
+    let descriptor_format = unsafe { RegisterClipboardFormatW(w!("FileGroupDescriptorW")) } as u16;
+    let preferred = unsafe { RegisterClipboardFormatW(w!("Preferred DropEffect")) } as u16;
+    let capability: IDataObjectAsyncCapability = data.cast().unwrap();
+    for expected in 1..=2 {
+        let mut descriptors = unsafe {
+            data.GetData(&format(descriptor_format, TYMED_HGLOBAL, -1))
+                .unwrap()
+        };
+        unsafe {
+            ReleaseStgMedium(&mut descriptors);
+            capability.StartOperation(None).unwrap();
+        }
+        let stream = content(&data, 0);
+        assert_eq!(read(&stream, 9).1, b"clipboard");
+        assert_eq!(opens.load(Ordering::SeqCst), expected);
+        drop(stream);
+        unsafe {
+            capability.EndOperation(S_OK, None, 1).unwrap();
+        }
+    }
+    let mut medium = unsafe { data.GetData(&format(preferred, TYMED_HGLOBAL, -1)).unwrap() };
+    unsafe {
+        let pointer = windows::Win32::System::Memory::GlobalLock(medium.u.hGlobal);
+        assert_eq!(*(pointer as *const u32), 1);
+        windows::Win32::System::Memory::GlobalUnlock(medium.u.hGlobal).ok();
+        ReleaseStgMedium(&mut medium);
+    }
+}
+
+#[test]
+fn clipboard_format_probes_do_not_enumerate_directories() {
+    struct Tree(Arc<AtomicUsize>);
+    impl gpui::VirtualFileTreeProvider for Tree {
+        fn load(&self) -> io::Result<VirtualFileDragPayload> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            VirtualFileDragPayload::new([descriptor("test.txt", source(b"test".to_vec(), false))])
+        }
+        fn cancel(&self) {}
+    }
+    let loads = Arc::new(AtomicUsize::new(0));
+    let counter = loads.clone();
+    let (data, _) = crate::external_drag::clipboard_data_object(Arc::new(move || {
+        Ok(ExternalDragPayload::VirtualFileTree(
+            gpui::DeferredVirtualFileDragPayload::new(Arc::new(Tree(counter.clone()))),
+        ))
+    }));
+    let descriptor_format = unsafe { RegisterClipboardFormatW(w!("FileGroupDescriptorW")) } as u16;
+    assert_eq!(
+        unsafe { data.QueryGetData(&format(descriptor_format, TYMED_HGLOBAL, -1)) },
+        S_OK
+    );
+    unsafe {
+        data.EnumFormatEtc(windows::Win32::System::Com::DATADIR_GET.0 as u32)
+            .unwrap();
+    }
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    let mut descriptors = unsafe {
+        data.GetData(&format(descriptor_format, TYMED_HGLOBAL, -1))
+            .unwrap()
+    };
+    unsafe {
+        ReleaseStgMedium(&mut descriptors);
+    }
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+}
