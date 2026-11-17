@@ -927,3 +927,10 @@ new repeated-paste and metadata-only directory-probe regressions. The NyaTerm
 integration compiled with `cargo check -p nyaterm-desktop --tests` before the
 final UI integration pass. Explorer end-to-end paste with a live SFTP source
 has not been performed; remote-source acceptance remains required.
+
+
+Clipboard ownership follow-up: reject new GetData requests after replacement,
+while existing content streams keep the STA alive independently of the current
+data-object generation. Count live streams explicitly rather than inferring
+ownership from Arc counts. Validation: all 16 Windows external_drag_tests passed,
+including replacement during an open stream; existing drag tests remain green.

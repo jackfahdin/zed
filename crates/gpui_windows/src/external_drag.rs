@@ -75,6 +75,7 @@ pub(crate) struct DragExportSession {
     pub(crate) dropped: AtomicBool,
     pub(crate) failed: AtomicBool,
     pub(crate) active: AtomicUsize,
+    pub(crate) streams: AtomicUsize,
 }
 
 impl DragExportSession {
@@ -212,6 +213,7 @@ pub(crate) fn start(
                 dropped: AtomicBool::new(false),
                 failed: AtomicBool::new(false),
                 active: AtomicUsize::new(0),
+                streams: AtomicUsize::new(0),
             });
             session.observe(NativeFileDragEvent::Started);
             unsafe {
@@ -700,6 +702,7 @@ pub(crate) struct ContentStream {
 
 impl ContentStream {
     pub(crate) fn new(descriptor: VirtualFileDescriptor, session: Arc<DragExportSession>) -> Self {
+        session.streams.fetch_add(1, Ordering::AcqRel);
         Self {
             descriptor,
             session,
@@ -710,6 +713,7 @@ impl ContentStream {
 }
 impl Drop for ContentStream {
     fn drop(&mut self) {
+        self.session.streams.fetch_sub(1, Ordering::AcqRel);
         if let Some(stream) = self.stream.get_mut() {
             stream.cancel();
         }
@@ -971,6 +975,7 @@ pub(crate) fn is_source_drag(data: &IDataObject, validation: usize) -> bool {
 /// every paste. All COM state remains on the clipboard STA, including streams.
 #[implement(IDataObject, IDataObjectAsyncCapability)]
 struct ClipboardDataObject {
+    accepting: Arc<AtomicBool>,
     provider: Arc<dyn Fn() -> anyhow::Result<ExternalDragPayload> + Send + Sync>,
     lifetime: Arc<()>,
     current: RefCell<Option<(IDataObject, Arc<DragExportSession>)>>,
@@ -1001,6 +1006,7 @@ impl ClipboardDataObject {
             dropped: AtomicBool::new(true),
             failed: AtomicBool::new(false),
             active: AtomicUsize::new(0),
+            streams: AtomicUsize::new(0),
         });
         self.sessions
             .lock()
@@ -1020,6 +1026,9 @@ impl ClipboardDataObject {
 }
 impl IDataObject_Impl for ClipboardDataObject_Impl {
     fn GetData(&self, requested: *const FORMATETC) -> Result<STGMEDIUM> {
+        if !self.accepting.load(Ordering::Acquire) && !self.in_operation.get() {
+            return Err(STG_E_REVERTED.into());
+        }
         let requested = unsafe { requested.as_ref() }
             .ok_or_else(|| windows::core::Error::from_hresult(E_POINTER))?;
         self.QueryGetData(requested).ok()?;
@@ -1165,7 +1174,7 @@ pub(crate) fn write_file_clipboard(
                 sender.send(Err(error.to_string())).log_err();
                 return;
             }
-            let (data, sessions) = clipboard_data_object(provider);
+            let (data, (sessions, accepting)) = clipboard_data_object(provider);
             let result = windows::Win32::System::Ole::OleSetClipboard(&data);
             if sender
                 .send(result.as_ref().map(|_| ()).map_err(ToString::to_string))
@@ -1182,6 +1191,7 @@ pub(crate) fn write_file_clipboard(
                         DispatchMessageW(&message);
                     }
                     let current = clipboard_is_current(&data);
+                    accepting.store(current, Ordering::Release);
                     let mut active = false;
                     if let Ok(mut sessions) = sessions.lock() {
                         sessions.retain(|weak| {
@@ -1192,7 +1202,7 @@ pub(crate) fn write_file_clipboard(
                                 session.cancel();
                             }
                             active |= !session.cancelled.load(Ordering::Acquire)
-                                && Arc::strong_count(&session) > 3;
+                                && session.streams.load(Ordering::Acquire) > 0;
                             true
                         });
                     }
@@ -1224,10 +1234,15 @@ pub(crate) fn clipboard_data_object(
     provider: Arc<dyn Fn() -> anyhow::Result<ExternalDragPayload> + Send + Sync>,
 ) -> (
     IDataObject,
-    Arc<std::sync::Mutex<Vec<Weak<DragExportSession>>>>,
+    (
+        Arc<std::sync::Mutex<Vec<Weak<DragExportSession>>>>,
+        Arc<AtomicBool>,
+    ),
 ) {
+    let accepting = Arc::new(AtomicBool::new(true));
     let sessions = Arc::new(std::sync::Mutex::new(Vec::<Weak<DragExportSession>>::new()));
     let data: IDataObject = ClipboardDataObject {
+        accepting: accepting.clone(),
         provider,
         lifetime: Arc::new(()),
         current: RefCell::new(None),
@@ -1239,5 +1254,5 @@ pub(crate) fn clipboard_data_object(
         preferred_format: unsafe { RegisterClipboardFormatW(w!("Preferred DropEffect")) } as u16,
     }
     .into();
-    (data, sessions)
+    (data, (sessions, accepting))
 }

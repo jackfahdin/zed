@@ -105,6 +105,7 @@ fn session(payload: ExternalDragPayload, lifetime: &Arc<()>) -> Arc<DragExportSe
         dropped: AtomicBool::new(false),
         failed: AtomicBool::new(false),
         active: AtomicUsize::new(0),
+        streams: AtomicUsize::new(0),
     })
 }
 fn data(session: Arc<DragExportSession>) -> IDataObject {
@@ -597,4 +598,27 @@ fn clipboard_format_probes_do_not_enumerate_directories() {
         ReleaseStgMedium(&mut descriptors);
     }
     assert_eq!(loads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn clipboard_replacement_rejects_new_reads_but_preserves_open_streams() {
+    let (data, (_, accepting)) = crate::external_drag::clipboard_data_object(Arc::new(|| {
+        Ok(ExternalDragPayload::VirtualFiles(
+            VirtualFileDragPayload::new([descriptor(
+                "test.txt",
+                source(b"running".to_vec(), false),
+            )])?,
+        ))
+    }));
+    let stream = content(&data, 0);
+    accepting.store(false, Ordering::Release);
+    assert_eq!(read(&stream, 7).1, b"running");
+    let content_format = unsafe { RegisterClipboardFormatW(w!("FileContents")) } as u16;
+    assert_eq!(
+        unsafe { data.GetData(&format(content_format, TYMED_ISTREAM, 0)) }
+            .err()
+            .unwrap()
+            .code(),
+        STG_E_REVERTED
+    );
 }
