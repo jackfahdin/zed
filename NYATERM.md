@@ -1,5 +1,66 @@
 # NyaTerm fork notes
 
+## Current upstream sync (2026-11-14)
+
+- Upstream base: `f0fa51bb510fc91f6da7ec55f3e0f317f1f975ec` (`https://github.com/zed-industries/zed`, `main`).
+- Previous published revision: `fb876e285d05f9df66bd01fb60ce3d4fcdb946d4`.
+- Preserved backup: `backup/nyaterm-20261114`; branch: `nyaterm`.
+
+Retain the NyaTerm native overlay, input, accessibility, cursor and platform patches. Adapt recorded scene layers to upstream ordering and preserve animation IDs and elapsed poses when replaying/splitting native child surfaces. Use the upstream blanket IntoElement implementation. Expose Path bounds and translation without rebuilding monotone curves, preserving winding and binning at different scales. Drop the obsolete formatting-only patch.
+
+Windows, Rust 1.99.1: GPUI library tests with test-support passed (467 passed, two ignored), including path translation and animated overlay replay. Combined NyaTerm workspace check passed using local fork sources. macOS/AppKit and Linux native behavior remain untested on this Windows machine.
+
+Earlier dated sections below describe historical revisions and validation.
+
+
+## 2026-11-13 accessibility before attachment and during deallocation
+
+Native accessibility selectors are installed on GPUIView itself now, so AppKit
+may call them before windowState is attached. Use an optional state lookup and
+fall back to NSView for that interval. Clear the ivar before releasing its Rc
+in dealloc so synchronous teardown queries cannot read a dangling attachment;
+partially initialized views may also deallocate safely. Add a native fixture
+that allocates, queries and releases a GPUIView without a MacWindow.
+
+Validation: touched-file rustfmt and git diff --check pass. GitHub's Actions
+permissions endpoint reports enabled, but workflow dispatch rejects execution
+with HTTP 422, "Actions has been disabled for this repository." Native macOS
+compilation and tests have not run; no Touch Bar or VoiceOver result is claimed.
+
+## 2026-11-13 native accessibility lifecycle regression
+
+Add a harness-free macOS integration executable so AppKit runs on the process
+main thread. For twenty real windows per mode, exercise inactive and activated
+adapters, queries during an App borrow, tree rendering, KVO on GPUIView and its
+content view, queries after GPUI close, notification delivery/removal after
+close, and bounded weak-reference checks for native view release. Run again
+with accessibility forcibly disabled. No external SSH server is involved.
+The macOS branch CI runs both modes with a ten-minute timeout.
+
+Validation before publication: Rust 1.99.1 rustfmt and git diff --check pass on
+Windows. Native execution awaits macOS CI. Physical Touch Bar closure and
+VoiceOver focus/reading, plus NyaTerm upload integrity, remain manual acceptance.
+
+## 2026-11-13 Touch Bar KVO-safe accessibility teardown
+
+Backport zed-industries/zed#65186 (reviewed head
+`8880559852fb2fd2cb8e331cf4e8ac2983301407`) for nyakang/nyaterm#1262.
+Use accesskit_macos 0.26.3's plain Adapter on GPUIView and implement the
+children, focused-element and hit-test selectors on that view. Do not dynamically
+subclass or restore the content view's Objective-C class: doing so on close can
+corrupt AppKit Touch Bar KVO observation and abort the application.
+
+Preserve this fork's Rc window ownership, hidden-cursor cleanup and frame-source
+teardown. Clone the separate AccessKit state before invoking it, release the
+adapter borrow before raising native events, and fall back to NSView on query
+reentry or after teardown. The plain adapter keeps a weak view reference, so
+removing the subclassing adapter also removes its strong view ownership cycle.
+No public API or dependency version changes.
+
+Validation before publication: touched Rust files pass Rust 1.99.1 rustfmt;
+`git diff --check` passes. Native macOS compilation, lifecycle tests and physical
+Touch Bar/VoiceOver acceptance are pending; Windows cannot validate AppKit.
+
 ## 2026-11-06 reentrant native window-control hit testing
 
 Publish the current `WindowControlArea` through a window-owned
@@ -818,3 +879,33 @@ Linux validation in the reduced fork workspace:
 Windows native execution and the original complete AI-history scenario have not
 been tested in this Linux environment. The Linux adapter's existing unused
 `wl_pointer` warning is unrelated to this change.
+
+
+## Planar video textures — 2026-11-15
+
+Adds bounded, reusable I420 video texture APIs, source color matrix/range and
+backend capability discovery. Three tightly uploaded planes share an R8 atlas
+allocation so existing sprite clipping, opacity and scene ordering remain
+consistent. Each plane clamps sampling to its own texel centers. BGRA dynamic
+textures retain their API. Headless/unsupported backends report no capability.
+
+Validation of the complete patch series: consuming NyaTerm `cargo check -p
+nyaterm-app` passed on Windows/MSVC with the local fork override; native DirectX
+pixel readback covers limited/full range, BT.709 red, opacity and clipping.
+WGSL storage/WebGL validation and record-size checks pass. Metal runtime and
+Linux device execution remain pending; no hardware decoding is introduced.
+
+Windows backend patch: DirectX R8 plane uploads and explicit YUV shader sampling.
+`cargo test -p gpui_windows --features test-support --lib planar_video_tests`
+passed (1 native GPU test); vertex/pixel entry points also compiled with
+D3DCompile. The test uses an invisible native window and synthetic colors only.
+
+Metal backend patch: R8 video updates, capability reporting and the matching
+BT.601/709/2020-NCL shader path. Shader record fields are generated from the
+shared Rust definition by the existing cbindgen build. Static API/layout review
+completed; macOS compilation and native GPU acceptance require a macOS runner.
+
+wgpu backend patch: R8 video uploads and WGSL conversion, including the WebGL
+record reader. `cargo test -p gpui_wgpu --lib shader` passed all four tests on
+Windows: storage/WebGL/subpixel shader validation and CPU/shader record sizes.
+Linux native rendering remains an outstanding platform acceptance item.

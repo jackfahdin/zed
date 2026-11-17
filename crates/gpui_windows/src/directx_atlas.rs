@@ -73,6 +73,10 @@ impl DirectXAtlas {
 }
 
 impl PlatformAtlas for DirectXAtlas {
+    fn supports_video_textures(&self) -> bool {
+        true
+    }
+
     fn get_or_insert_with<'a>(
         &self,
         key: AtlasKey,
@@ -384,6 +388,11 @@ fn validate_update(
     bytes: &[u8],
     bytes_per_row: u32,
 ) -> anyhow::Result<()> {
+    let pixel_bytes = if tile.texture_id.kind == AtlasTextureKind::Monochrome {
+        1
+    } else {
+        4
+    };
     let width = u32::try_from(bounds.size.width.0)
         .map_err(|_| anyhow::anyhow!("negative texture width"))?;
     let height = u32::try_from(bounds.size.height.0)
@@ -406,13 +415,13 @@ fn validate_update(
         || bottom > tile.bounds.size.height.0
         || width == 0
         || height == 0
-        || bytes_per_row < width * 4
+        || bytes_per_row < width * pixel_bytes
     {
         anyhow::bail!("dynamic texture update is outside the allocated tile");
     }
     let required = usize::try_from(height - 1)?
         .checked_mul(bytes_per_row as usize)
-        .and_then(|offset| offset.checked_add(width as usize * 4))
+        .and_then(|offset| offset.checked_add(width as usize * pixel_bytes as usize))
         .ok_or_else(|| anyhow::anyhow!("dynamic texture payload size overflow"))?;
     anyhow::ensure!(
         bytes.len() == required,

@@ -12,6 +12,11 @@ workspace = true
 path = "src/gpui_macos.rs"
 doctest = false
 
+# AppKit and AccessKit must be exercised on the process main thread.
+[[test]]
+name = "accessibility_lifecycle"
+harness = false
+
 [features]
 default = ["gpui/default"]
 bench-support = ["gpui/bench-support", "gpui_apple/bench-support"]
@@ -55,6 +60,7 @@ parking_lot.workspace = true
 raw-window-handle.workspace = true
 scheduler.workspace = true
 semver.workspace = true
+serde_json.workspace = true
 smallvec.workspace = true
 strum.workspace = true
 uuid.workspace = true

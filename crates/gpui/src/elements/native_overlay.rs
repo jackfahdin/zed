@@ -18,13 +18,6 @@ pub struct NativeOverlay {
     input: NativeOverlayInput,
 }
 
-impl IntoElement for NativeOverlay {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl Element for NativeOverlay {
     type RequestLayoutState = ();
     type PrepaintState = ();

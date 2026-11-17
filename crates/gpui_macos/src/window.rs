@@ -58,7 +58,7 @@ use parking_lot::Mutex;
 use raw_window_handle as rwh;
 use smallvec::SmallVec;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     ffi::{CStr, CString, c_void},
     mem,
     ops::Range,
@@ -269,6 +269,19 @@ unsafe fn build_classes() {
                 sel!(characterIndexForPoint:),
                 character_index_for_point as extern "C" fn(_, Sel, NSPoint) -> NSUInteger,
             );
+
+            decl.add_method(
+                sel!(accessibilityChildren),
+                accessibility_children as extern "C" fn(_, Sel) -> *mut AnyObject,
+            );
+            decl.add_method(
+                sel!(accessibilityFocusedUIElement),
+                accessibility_focused_ui_element as extern "C" fn(_, Sel) -> *mut AnyObject,
+            );
+            decl.add_method(
+                sel!(accessibilityHitTest:),
+                accessibility_hit_test as extern "C" fn(_, Sel, NSPoint) -> *mut AnyObject,
+            );
             decl.register()
         };
         BLURRED_VIEW_CLASS = {
@@ -433,6 +446,10 @@ unsafe fn build_window_class(name: &CStr, superclass: &AnyClass) -> *const AnyCl
         decl.add_method(
             sel!(windowWillEnterFullScreen:),
             window_will_enter_fullscreen as extern "C" fn(_, Sel, *mut AnyObject),
+        );
+        decl.add_method(
+            sel!(windowDidFailToEnterFullScreen:),
+            window_did_fail_to_enter_fullscreen as extern "C" fn(_, Sel, *mut AnyObject),
         );
         decl.add_method(
             sel!(windowWillExitFullScreen:),
@@ -678,6 +695,7 @@ struct MacWindowState {
     last_left_mouse_down_event: Option<Retained<AnyObject>>,
     synthetic_drag_counter: usize,
     traffic_light_position: Option<Point<Pixels>>,
+    native_titlebar_visible: bool,
     traffic_light_frames: Option<TrafficLightFrames>,
     pre_fullscreen_traffic_light_frames: Option<TrafficLightFrames>,
     transparent_titlebar: bool,
@@ -702,13 +720,21 @@ struct MacWindowState {
     toggle_tab_bar_callback: Option<Box<dyn FnMut()>>,
     activated_least_once: bool,
     closed: Arc<AtomicBool>,
-    accesskit_adapter: Option<accesskit_macos::SubclassingAdapter>,
+    // Kept behind an `Rc<RefCell<_>>` so the `GPUIView` accessibility methods can clone it
+    // out and release the window state lock before calling into AccessKit. AppKit may
+    // query accessibility while the lock is already held further up the stack, and
+    // raising AccessKit events can synchronously trigger more queries.
+    accesskit: Option<Rc<RefCell<AccessKitState>>>,
     // The parent window if this window is a sheet (Dialog kind)
     sheet_parent: Option<*mut AnyObject>,
 }
 
 impl MacWindowState {
     fn move_traffic_light(&mut self) {
+        if !self.native_titlebar_visible {
+            self.update_native_titlebar_visibility();
+        }
+
         if let Some(traffic_light_position) = self.traffic_light_position {
             if self.is_fullscreen() && !self.is_exiting_fullscreen {
                 self.restore_traffic_light();
@@ -764,6 +790,46 @@ impl MacWindowState {
                 buttons.close.updateTrackingAreas();
                 buttons.minimize.updateTrackingAreas();
                 buttons.zoom.updateTrackingAreas();
+            }
+        }
+    }
+
+    fn update_native_titlebar_visibility(&self) {
+        let Some(close_button) = self
+            .native_window()
+            .standardWindowButton(NSWindowButton::CloseButton)
+        else {
+            return;
+        };
+        if let Some(titlebar_container) = Self::titlebar_container(&close_button) {
+            titlebar_container.setHidden(!self.native_titlebar_visible);
+        }
+    }
+
+    fn apply_fullscreen_titlebar_opacity(&self) {
+        let min_version = NSOperatingSystemVersion {
+            majorVersion: 15,
+            minorVersion: 3,
+            patchVersion: 0,
+        };
+
+        if is_macos_version_at_least(min_version) {
+            unsafe {
+                let _: () = msg_send![self.native_window, setTitlebarAppearsTransparent: Bool::NO];
+            }
+        }
+    }
+
+    fn restore_windowed_titlebar_transparency(&self) {
+        let min_version = NSOperatingSystemVersion {
+            majorVersion: 15,
+            minorVersion: 3,
+            patchVersion: 0,
+        };
+
+        if is_macos_version_at_least(min_version) && self.transparent_titlebar {
+            unsafe {
+                let _: () = msg_send![self.native_window, setTitlebarAppearsTransparent: Bool::YES];
             }
         }
     }
@@ -1158,6 +1224,7 @@ impl MacWindow {
                 traffic_light_position: titlebar
                     .as_ref()
                     .and_then(|titlebar| titlebar.traffic_light_position),
+                native_titlebar_visible: true,
                 traffic_light_frames: None,
                 pre_fullscreen_traffic_light_frames: None,
                 transparent_titlebar: titlebar
@@ -1179,7 +1246,7 @@ impl MacWindow {
                 toggle_tab_bar_callback: None,
                 activated_least_once: false,
                 closed: Arc::new(AtomicBool::new(false)),
-                accesskit_adapter: None,
+                accesskit: None,
                 sheet_parent: None,
             }));
             let mut window = Self(state, marker, metal_frames);
@@ -1416,15 +1483,10 @@ impl MacWindow {
 impl Drop for MacWindow {
     fn drop(&mut self) {
         let mut this = self.0.lock();
-        // `accesskit_macos::SubclassingAdapter::for_window` strong-retains the
-        // window's content view, and that content view keeps the `GPUIView` it
-        // hosts alive. Together with the `Rc<Mutex<MacWindowState>>` parked in
-        // both views' `windowState` ivar, that forms
-        // `MacWindowState -> adapter -> content view -> GPUIView -> MacWindowState`,
-        // a cycle the delegate/`frame_source` teardown below cannot break. Drop
-        // the adapter here so the native view, its `CAMetalLayer` and the
-        // renderer's command queue are actually released with the window.
-        drop(this.accesskit_adapter.take());
+        // The `GPUIView` (and with it this state) can outlive the GPUI window until AppKit
+        // finishes closing it. Accessibility queries arriving in the meantime fall back to
+        // `NSView`'s defaults instead of serving a tree for a window GPUI no longer updates.
+        this.accesskit.take();
         this.renderer.destroy();
         let window = this.native_window;
         let hidden_cursor = this.hidden_cursor;
@@ -1675,6 +1737,12 @@ impl PlatformWindow for MacWindow {
             }
             let _: () = msg_send![unarchiver, release];
         }
+    }
+
+    fn set_native_titlebar_visibility(&self, visible: bool) {
+        let mut state = self.0.lock();
+        state.native_titlebar_visible = visible;
+        state.update_native_titlebar_visibility();
     }
 
     fn set_traffic_light_position(&self, position: Point<Pixels>) {
@@ -2191,6 +2259,56 @@ impl PlatformWindow for MacWindow {
         None
     }
 
+    fn debug_state(&self) -> serde_json::Value {
+        let state = self.0.lock();
+        let window = state.native_window();
+        let screen: *mut AnyObject = unsafe { msg_send![state.native_window, screen] };
+        let frame = window.frame();
+        let layer = state.renderer.layer().map(|layer| {
+            let drawable_size = layer.drawableSize();
+            serde_json::json!({
+                "drawable_size": [drawable_size.width, drawable_size.height],
+                "contents_scale": layer.contentsScale(),
+            })
+        });
+        serde_json::json!({
+            "window_number": window.windowNumber(),
+            "occlusion_state_visible": window
+                .occlusionState()
+                .contains(NSWindowOcclusionState::Visible),
+            "is_visible": window.isVisible(),
+            "is_key_window": window.isKeyWindow(),
+            "is_main_window": window.isMainWindow(),
+            "is_miniaturized": window.isMiniaturized(),
+            "is_on_active_space": window.isOnActiveSpace(),
+            "screen_display_id": display_id_for_screen(screen),
+            "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height],
+            "backing_scale_factor": window.backingScaleFactor(),
+            "frame_source": match &state.frame_source {
+                FrameSource::Metal(metal_frames) => metal_frames.debug_state(),
+                FrameSource::DisplayLink(Some(frame_source)) => frame_source.debug_state(),
+                FrameSource::DisplayLink(None) => serde_json::json!({
+                    "kind": "CVDisplayLink",
+                    "attached": false,
+                }),
+            },
+            "renderer": {
+                "display_link_attached": state.renderer.is_display_link_attached(),
+                "presents_with_transaction": state.renderer.presents_with_transaction(),
+                "layer": layer,
+            },
+            "request_frame_callback_installed": state.request_frame_callback.is_some(),
+            "last_reported_visibility": state
+                .last_visibility
+                .map(|visibility| format!("{visibility:?}")),
+            "activated_at_least_once": state.activated_least_once,
+            "cursor": {
+                "cached_style": state.cursor_style,
+                "cached_visible": state.cursor_visible.load(Ordering::Relaxed),
+            },
+        })
+    }
+
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {
         let executor = self.0.lock().foreground_executor.clone();
         executor
@@ -2459,23 +2577,30 @@ impl PlatformWindow for MacWindow {
         };
         let action_handler = A11yActionHandler(callbacks.action);
 
+        // `GPUIView` implements the `NSView` accessibility methods itself and forwards them to
+        // this adapter. `accesskit_macos::SubclassingAdapter` is not used because restoring the
+        // view's class when it is dropped corrupts the KVO isa-swizzling AppKit's Touch Bar
+        // support has applied to the view, making AppKit throw while the window closes.
         let adapter = unsafe {
-            accesskit_macos::SubclassingAdapter::for_window(
-                lock.native_window as *mut c_void,
-                activation_handler,
-                action_handler,
-            )
+            accesskit_macos::Adapter::new(lock.native_view.as_ptr().cast(), false, action_handler)
         };
 
-        lock.accesskit_adapter = Some(adapter);
+        lock.accesskit = Some(Rc::new(RefCell::new(AccessKitState {
+            adapter,
+            activation_handler,
+        })));
     }
 
     fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
-        let events = {
-            let mut lock = self.0.lock();
-            lock.accesskit_adapter
-                .as_mut()
-                .and_then(|adapter| adapter.update_if_active(|| tree_update))
+        let Some(accesskit) = self.0.lock().accesskit.clone() else {
+            return;
+        };
+        let events = match accesskit.try_borrow_mut() {
+            Ok(mut accesskit) => accesskit.adapter.update_if_active(|| tree_update),
+            Err(_) => {
+                log::error!("dropped accessibility tree update during an accessibility query");
+                None
+            }
         };
         if let Some(events) = events {
             events.raise();
@@ -2485,6 +2610,11 @@ impl PlatformWindow for MacWindow {
     fn a11y_update_window_bounds(&self) {
         // macOS handles window bounds tracking automatically via NSAccessibility.
     }
+}
+
+struct AccessKitState {
+    adapter: accesskit_macos::Adapter,
+    activation_handler: A11yActivationHandler,
 }
 
 struct A11yActivationHandler {
@@ -2549,27 +2679,38 @@ unsafe fn is_gpui_window(window: *mut AnyObject) -> bool {
 }
 
 unsafe fn get_window_state(object: &AnyObject) -> Rc<Mutex<MacWindowState>> {
+    unsafe { try_window_state(object) }.expect("initialized GPUI window state")
+}
+
+unsafe fn try_window_state(object: &AnyObject) -> Option<Rc<Mutex<MacWindowState>>> {
     unsafe {
         let raw = *object
             .class()
-            .instance_variable(WINDOW_STATE_IVAR)
-            .expect("GPUI window state ivar")
+            .instance_variable(WINDOW_STATE_IVAR)?
             .load::<*mut c_void>(object);
+        if raw.is_null() {
+            return None;
+        }
         let rc1 = Rc::from_raw(raw as *mut Mutex<MacWindowState>);
         let rc2 = rc1.clone();
         mem::forget(rc1);
-        rc2
+        Some(rc2)
     }
 }
 
 unsafe fn drop_window_state(object: &AnyObject) {
     unsafe {
-        let raw = *object
+        let slot = object
             .class()
             .instance_variable(WINDOW_STATE_IVAR)
             .expect("GPUI window state ivar")
-            .load::<*mut c_void>(object);
-        Rc::from_raw(raw as *mut Mutex<MacWindowState>);
+            .load_ptr::<*mut c_void>(object);
+        // NSView teardown may synchronously query accessibility. Invalidate
+        // the attachment before releasing it, including partially initialized views.
+        let raw = ptr::replace(slot, ptr::null_mut());
+        if !raw.is_null() {
+            drop(Rc::from_raw(raw as *mut Mutex<MacWindowState>));
+        }
     }
 }
 
@@ -2589,6 +2730,57 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
         drop_window_state(this);
         let _: () = msg_send![super(this, class!(NSView)), dealloc];
     }
+}
+
+/// Runs `f` with the view's AccessKit state, or returns `None` when accessibility is disabled,
+/// not initialized yet, or already torn down. Also returns `None` instead of deadlocking or
+/// panicking when the query arrives while GPUI holds the window state lock or from within
+/// AccessKit itself.
+fn with_accesskit_state<R>(
+    view: &AnyObject,
+    f: impl FnOnce(&mut AccessKitState) -> R,
+) -> Option<R> {
+    let window_state = unsafe { try_window_state(view) }?;
+    let accesskit = window_state.try_lock()?.accesskit.clone()?;
+    let mut accesskit = accesskit.try_borrow_mut().ok()?;
+    Some(f(&mut accesskit))
+}
+
+extern "C" fn accessibility_children(this: &AnyObject, _: Sel) -> *mut AnyObject {
+    with_accesskit_state(this, |state| {
+        state
+            .adapter
+            .view_children(&mut state.activation_handler)
+            .cast::<AnyObject>()
+    })
+    .unwrap_or_else(|| unsafe { msg_send![super(this, class!(NSView)), accessibilityChildren] })
+}
+
+extern "C" fn accessibility_focused_ui_element(this: &AnyObject, _: Sel) -> *mut AnyObject {
+    with_accesskit_state(this, |state| {
+        state
+            .adapter
+            .focus(&mut state.activation_handler)
+            .cast::<AnyObject>()
+    })
+    .unwrap_or_else(|| unsafe {
+        msg_send![super(this, class!(NSView)), accessibilityFocusedUIElement]
+    })
+}
+
+extern "C" fn accessibility_hit_test(this: &AnyObject, _: Sel, point: NSPoint) -> *mut AnyObject {
+    with_accesskit_state(this, |state| {
+        state
+            .adapter
+            .hit_test(
+                accesskit_macos::NSPoint::new(point.x, point.y),
+                &mut state.activation_handler,
+            )
+            .cast::<AnyObject>()
+    })
+    .unwrap_or_else(|| unsafe {
+        msg_send![super(this, class!(NSView)), accessibilityHitTest: point]
+    })
 }
 
 fn add_mouse_tracking_area(native_view: &NSView) {
@@ -2613,21 +2805,14 @@ fn add_mouse_tracking_area(native_view: &NSView) {
     native_view.addTrackingArea(&tracking_area);
 }
 
-extern "C" fn reset_cursor_rects(this: &AnyObject, _: Sel) {
-    // SAFETY: AppKit invokes cursor-rect updates on the main thread for GPUIView instances,
-    // whose WINDOW_STATE_IVAR is initialized when the view is created. The cursor registered
-    // below is a valid NSCursor.
+/// # Safety
+///
+/// Must be called on the AppKit main thread.
+pub(crate) unsafe fn native_cursor(style: CursorStyle) -> *mut AnyObject {
+    // SAFETY: Each selector is an `NSCursor` class method returning a cursor.
     unsafe {
-        let _: () = msg_send![super(this, class!(NSView)), resetCursorRects];
-
-        let window_state = get_window_state(this);
-        let (cursor_style, hidden_cursor) = {
-            let state = window_state.lock();
-            (state.cursor_style, state.hidden_cursor)
-        };
-
-        let cursor: *mut AnyObject = match cursor_style {
-            CursorStyle::Hidden => hidden_cursor,
+        match style {
+            CursorStyle::Hidden => std::ptr::null_mut(),
             CursorStyle::Arrow => msg_send![class!(NSCursor), arrowCursor],
             CursorStyle::IBeam => msg_send![class!(NSCursor), IBeamCursor],
             CursorStyle::Crosshair => msg_send![class!(NSCursor), crosshairCursor],
@@ -2661,6 +2846,27 @@ extern "C" fn reset_cursor_rects(this: &AnyObject, _: Sel) {
             CursorStyle::DragLink => msg_send![class!(NSCursor), dragLinkCursor],
             CursorStyle::DragCopy => msg_send![class!(NSCursor), dragCopyCursor],
             CursorStyle::ContextualMenu => msg_send![class!(NSCursor), contextualMenuCursor],
+        }
+    }
+}
+
+extern "C" fn reset_cursor_rects(this: &AnyObject, _: Sel) {
+    // SAFETY: AppKit invokes cursor-rect updates on the main thread for GPUIView instances,
+    // whose WINDOW_STATE_IVAR is initialized when the view is created. The cursor registered
+    // below is a valid NSCursor.
+    unsafe {
+        let _: () = msg_send![super(this, class!(NSView)), resetCursorRects];
+
+        let window_state = get_window_state(this);
+        let (cursor_style, hidden_cursor) = {
+            let state = window_state.lock();
+            (state.cursor_style, state.hidden_cursor)
+        };
+
+        let cursor = if cursor_style == CursorStyle::Hidden {
+            hidden_cursor
+        } else {
+            native_cursor(cursor_style)
         };
 
         let bounds: NSRect = msg_send![this, bounds];
@@ -3135,37 +3341,22 @@ extern "C" fn window_will_enter_fullscreen(this: &AnyObject, _: Sel, _: *mut Any
     lock.is_exiting_fullscreen = false;
     lock.pre_fullscreen_traffic_light_frames = lock.traffic_light_frames;
     lock.restore_traffic_light();
+    lock.apply_fullscreen_titlebar_opacity();
+}
 
-    let min_version = NSOperatingSystemVersion {
-        majorVersion: 15,
-        minorVersion: 3,
-        patchVersion: 0,
-    };
-
-    if is_macos_version_at_least(min_version) {
-        unsafe {
-            let _: () = msg_send![lock.native_window, setTitlebarAppearsTransparent: Bool::NO];
-        }
-    }
+extern "C" fn window_did_fail_to_enter_fullscreen(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+    let window_state = unsafe { get_window_state(this) };
+    let mut lock = window_state.as_ref().lock();
+    lock.restore_windowed_titlebar_transparency();
+    lock.traffic_light_frames = lock.pre_fullscreen_traffic_light_frames.take();
+    lock.move_traffic_light();
 }
 
 extern "C" fn window_will_exit_fullscreen(this: &AnyObject, _: Sel, _: *mut AnyObject) {
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.as_ref().lock();
     lock.is_exiting_fullscreen = true;
-
-    let min_version = NSOperatingSystemVersion {
-        majorVersion: 15,
-        minorVersion: 3,
-        patchVersion: 0,
-    };
-
-    if is_macos_version_at_least(min_version) && lock.transparent_titlebar {
-        unsafe {
-            let _: () = msg_send![lock.native_window, setTitlebarAppearsTransparent: Bool::YES];
-        }
-    }
-
+    lock.restore_windowed_titlebar_transparency();
     lock.move_traffic_light();
 }
 
@@ -3173,6 +3364,9 @@ extern "C" fn window_did_fail_to_exit_fullscreen(this: &AnyObject, _: Sel, _: *m
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.as_ref().lock();
     lock.is_exiting_fullscreen = false;
+    if lock.is_fullscreen() {
+        lock.apply_fullscreen_titlebar_opacity();
+    }
     lock.restore_traffic_light();
 }
 
@@ -3296,12 +3490,14 @@ extern "C" fn window_did_change_key_status(this: &AnyObject, selector: Sel, _: *
     let executor = lock.foreground_executor.clone();
     drop(lock);
 
-    let a11y_events = {
-        let mut lock = window_state.lock();
-        lock.accesskit_adapter
-            .as_mut()
-            .and_then(|adapter| adapter.update_view_focus_state(is_active))
-    };
+    let accesskit = window_state.lock().accesskit.clone();
+    let a11y_events = accesskit.and_then(|accesskit| match accesskit.try_borrow_mut() {
+        Ok(mut accesskit) => accesskit.adapter.update_view_focus_state(is_active),
+        Err(_) => {
+            log::error!("dropped accessibility focus change during an accessibility query");
+            None
+        }
+    });
     if let Some(events) = a11y_events {
         events.raise();
     }

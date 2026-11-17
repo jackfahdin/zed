@@ -45,6 +45,7 @@ mod interactive;
 mod key_dispatch;
 mod keymap;
 mod path_builder;
+mod path_winding;
 mod platform;
 mod platform_scheduler;
 mod scene;
@@ -132,6 +133,7 @@ pub use global::*;
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };
+pub use file_promise::{PromisedFileDescriptor, PromisedFileDragPayload, PromisedFileProvider};
 pub use gpui_shared_string::*;
 pub use gpui_util::arc_cow::ArcCow;
 pub use input::*;
@@ -139,6 +141,7 @@ pub use inspector::*;
 pub use interactive::*;
 pub use keymap::*;
 pub use path_builder::*;
+pub(crate) use path_winding::*;
 pub use platform::*;
 pub use profiler::*;
 pub use refineable::*;
