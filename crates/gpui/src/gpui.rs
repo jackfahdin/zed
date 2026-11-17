@@ -126,7 +126,6 @@ pub use color::*;
 pub use element::*;
 pub use elements::*;
 pub use executor::*;
-pub use file_promise::{PromisedFileDescriptor, PromisedFileDragPayload, PromisedFileProvider};
 pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
